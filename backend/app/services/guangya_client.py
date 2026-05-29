@@ -80,6 +80,25 @@ class GuangyaClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def _account_request(
+        self,
+        url: str,
+        json_data: dict = None,
+        method: str = "POST",
+        timeout: int = 15,
+    ) -> httpx.Response:
+        headers = self._account_headers()
+        headers["authorization"] = f"Bearer {self.access_token}"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.request(method, url, headers=headers, json=json_data)
+
+            if resp.status_code == 401 and self.refresh_token_value:
+                refreshed = await self._refresh_token()
+                if refreshed:
+                    headers["authorization"] = f"Bearer {self.access_token}"
+                    resp = await client.request(method, url, headers=headers, json=json_data)
+            return resp
+
     async def _refresh_token(self) -> bool:
         headers = self._account_headers()
         headers["x-action"] = "401"
@@ -205,12 +224,25 @@ class GuangyaClient:
         )
 
     async def user_info(self) -> dict:
-        headers = self._account_headers()
-        headers["authorization"] = f"Bearer {self.access_token}"
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{settings.guangya_account_base}/v1/user/me",
-                headers=headers,
-            )
+        candidates = [
+            ("POST", f"{settings.guangya_account_base}/v1/user/me"),
+            ("GET", f"{settings.guangya_account_base}/v1/user/me"),
+            ("POST", f"{settings.guangya_account_base}/v1/user/info"),
+            ("GET", f"{settings.guangya_account_base}/v1/user/info"),
+            ("POST", f"{settings.guangya_account_base}/v1/user/profile"),
+            ("GET", f"{settings.guangya_account_base}/v1/user/profile"),
+        ]
+        last_resp: httpx.Response | None = None
+        for method, url in candidates:
+            resp = await self._account_request(url, method=method)
+            last_resp = resp
+            if resp.status_code in (404, 405, 501):
+                continue
             resp.raise_for_status()
             return resp.json()
+
+        return {
+            "_capacity_refresh_unsupported": True,
+            "message": "光鸭账号容量接口暂不可用，转存时会按光鸭实际返回自动识别满盘",
+            "last_status_code": last_resp.status_code if last_resp else None,
+        }

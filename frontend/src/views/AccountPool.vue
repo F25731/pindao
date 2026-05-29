@@ -131,6 +131,26 @@ function capacityStatus(row: any) {
   return 'success'
 }
 
+function renderCapacity(row: any) {
+  if (!row.total_capacity_bytes && !row.used_capacity_bytes) {
+    return h('div', { style: 'font-size: 12px; color: #8c8c8c;' }, [
+      h('div', '容量未知'),
+      h('div', { style: 'margin-top: 2px;' }, '转存时会按光鸭返回自动识别满盘'),
+    ])
+  }
+  return h('div', { style: 'min-width: 180px;' }, [
+    h(NProgress, {
+      type: 'line',
+      percentage: usagePercent(row),
+      status: capacityStatus(row) as any,
+      indicatorPlacement: 'inside',
+      height: 18,
+      processing: row.status === 'available' && usagePercent(row) >= 80,
+    }),
+    h('div', { style: 'margin-top: 4px; font-size: 12px; color: #666;' }, `${formatBytes(row.used_capacity_bytes)} / ${formatBytes(row.total_capacity_bytes)}`),
+  ])
+}
+
 const columns = [
   { title: 'ID', key: 'id', width: 50 },
   { title: '名称', key: 'name', width: 120 },
@@ -141,17 +161,7 @@ const columns = [
   { title: '优先级', key: 'priority', width: 70 },
   {
     title: '容量', key: 'capacity', width: 220,
-    render: (row: any) => h('div', { style: 'min-width: 180px;' }, [
-      h(NProgress, {
-        type: 'line',
-        percentage: usagePercent(row),
-        status: capacityStatus(row) as any,
-        indicatorPlacement: 'inside',
-        height: 18,
-        processing: row.status === 'available' && usagePercent(row) >= 80,
-      }),
-      h('div', { style: 'margin-top: 4px; font-size: 12px; color: #666;' }, `${formatBytes(row.used_capacity_bytes)} / ${formatBytes(row.total_capacity_bytes)}`),
-    ])
+    render: renderCapacity
   },
   { title: '已处理', key: 'processed_count', width: 70 },
   { title: '错误次数', key: 'error_count', width: 80 },

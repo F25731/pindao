@@ -52,6 +52,17 @@ async def refresh_account_capacity(db: AsyncSession, account: GuangyaAccount) ->
     )
     info = await client.user_info()
 
+    if info.get("_capacity_refresh_unsupported"):
+        if account.status == "available" and (
+            not account.last_error or account.last_error.startswith("刷新容量失败")
+        ):
+            account.last_error = None
+        if client.access_token != account.access_token:
+            account.access_token = client.access_token
+            account.refresh_token = client.refresh_token_value
+        await db.flush()
+        return info
+
     total = _collect_first_number(
         info,
         ("totalCapacity", "total_capacity", "totalSpace", "total_space", "capacity", "quota", "total"),
