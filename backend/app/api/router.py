@@ -11,11 +11,13 @@ from app.api.api_keys import router as api_keys_router
 from app.api.export import router as export_router
 from app.api.stats import router as stats_router
 from app.api.external import router as external_router
+from app.api.guangya_login import router as guangya_login_router
 
 api_router = APIRouter()
 
 api_router.include_router(auth_router, prefix="/auth", tags=["认证"])
 api_router.include_router(accounts_router, prefix="/accounts", tags=["账号池"])
+api_router.include_router(guangya_login_router, prefix="/accounts/login", tags=["光鸭登录"])
 api_router.include_router(imports_router, prefix="/imports", tags=["导入"])
 api_router.include_router(resources_router, prefix="/resources", tags=["资源"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["任务"])
