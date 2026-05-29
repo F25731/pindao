@@ -136,12 +136,24 @@ async def batch_retry(
         )
     )
     resources = result.scalars().all()
+    resource_ids = [resource.id for resource in resources]
+    task_result = await db.execute(select(Task).where(Task.resource_id.in_(resource_ids)))
+    tasks_by_resource = {task.resource_id: task for task in task_result.scalars().all()}
+
     count = 0
     for resource in resources:
         resource.status = "待转存"
         resource.retry_count = 0
         resource.error_message = None
         resource.error_response = None
+        task = tasks_by_resource.get(resource.id)
+        if task:
+            task.status = "pending"
+            task.attempt = 0
+            task.error_message = None
+            task.error_response = None
+            task.checkpoint = None
+            task.next_retry_at = None
         count += 1
 
     await db.commit()
