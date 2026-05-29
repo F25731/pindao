@@ -1,18 +1,21 @@
 <template>
   <div>
-    <n-card title="导入 Excel">
+    <n-card title="导入资源文件">
+      <n-alert type="info" style="margin-bottom: 16px;">
+        支持 .xlsx 和 .csv 格式。百万级数据建议使用 CSV（速度快 10 倍以上）。表格需包含三列：名称、标签、链接。
+      </n-alert>
       <n-upload
         :action="'/api/imports/upload'"
         :headers="uploadHeaders"
-        accept=".xlsx,.xls"
+        accept=".xlsx,.xls,.csv"
         :max="1"
         @finish="handleUploadFinish"
         @error="handleUploadError"
       >
         <n-upload-dragger>
           <div style="padding: 24px; text-align: center;">
-            <p style="font-size: 16px; margin-bottom: 8px;">点击或拖拽 Excel 文件到此处</p>
-            <p style="color: #999;">支持 .xlsx 格式，表格需包含：名称、标签、链接 三列</p>
+            <p style="font-size: 16px; margin-bottom: 8px;">点击或拖拽文件到此处</p>
+            <p style="color: #999;">支持 .xlsx / .csv，大文件推荐 CSV</p>
           </div>
         </n-upload-dragger>
       </n-upload>

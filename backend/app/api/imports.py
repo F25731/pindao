@@ -43,8 +43,8 @@ async def upload_excel(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if not file.filename.endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx、.xls 或 .csv 文件")
 
     safe_name = f"{token_hex(8)}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, safe_name)
