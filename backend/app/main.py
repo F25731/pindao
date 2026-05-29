@@ -13,6 +13,9 @@ async def lifespan(app: FastAPI):
     from app.services.auth_service import ensure_admin_exists
     from app.database import async_session
 
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     async with async_session() as session:
         await ensure_admin_exists(session)
     yield

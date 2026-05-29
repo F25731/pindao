@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, engine
 from app.config import settings
-from app.models import Task, Resource, GuangyaAccount
+from app.models import Base, Task, Resource, GuangyaAccount
 from app.worker.transfer_handler import execute_transfer
 
 logging.basicConfig(
@@ -83,6 +83,8 @@ async def process_task(task_id: int):
         task = result.scalar_one_or_none()
         if not task:
             return
+        if task.status not in ("pending", "failed_retryable"):
+            return
 
         res_result = await db.execute(
             select(Resource).where(Resource.id == task.resource_id)
@@ -92,6 +94,10 @@ async def process_task(task_id: int):
             task.status = "failed_final"
             task.error_message = "关联资源不存在"
             await db.commit()
+            return
+
+        await db.refresh(task)
+        if task.status not in ("pending", "failed_retryable"):
             return
 
         # 标记为运行中
@@ -152,6 +158,8 @@ async def worker_loop():
 
 async def main():
     logger.info("光鸭资源转存 Worker 启动中...")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     await worker_loop()
 
 

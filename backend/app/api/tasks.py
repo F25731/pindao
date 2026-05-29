@@ -3,11 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import AdminUser, Task
+from app.models import AdminUser, Resource, Task
 
 router = APIRouter()
 
@@ -69,7 +69,7 @@ async def queue_status(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
-    statuses = ["pending", "running", "failed_retryable"]
+    statuses = ["pending", "running", "pause_requested", "paused", "failed_retryable", "failed_final", "success", "skipped"]
     counts = {}
     for s in statuses:
         result = await db.execute(
@@ -89,9 +89,81 @@ async def cancel_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.status not in ("pending", "running"):
+    if task.status not in ("pending", "running", "failed_retryable", "pause_requested", "paused"):
         raise HTTPException(status_code=400, detail="当前状态不支持取消")
 
-    task.status = "skipped"
+    if task.status == "running":
+        checkpoint = task.checkpoint or {}
+        checkpoint["cancel_requested"] = True
+        task.checkpoint = checkpoint
+        task.status = "cancel_requested"
+    else:
+        task.status = "skipped"
+        task.completed_at = datetime.now(timezone.utc)
+
+    result = await db.execute(select(Resource).where(Resource.id == task.resource_id))
+    resource = result.scalar_one_or_none()
+    if resource:
+        resource.status = "已取消"
+
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/{task_id}/pause")
+async def pause_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status not in ("pending", "running", "failed_retryable", "pause_requested", "paused"):
+        raise HTTPException(status_code=400, detail="当前状态不支持暂停")
+
+    if task.status == "running":
+        checkpoint = task.checkpoint or {}
+        checkpoint["pause_requested"] = True
+        task.checkpoint = checkpoint
+        task.status = "pause_requested"
+    else:
+        task.status = "paused"
+
+    result = await db.execute(select(Resource).where(Resource.id == task.resource_id))
+    resource = result.scalar_one_or_none()
+    if resource:
+        resource.status = "转存暂停"
+
+    await db.commit()
+    return {"ok": True, "status": task.status}
+
+
+@router.post("/{task_id}/resume")
+async def resume_task(
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status not in ("paused", "pause_requested"):
+        raise HTTPException(status_code=400, detail="当前状态不支持恢复")
+
+    checkpoint = task.checkpoint or {}
+    checkpoint.pop("pause_requested", None)
+    checkpoint.pop("cancel_requested", None)
+    task.checkpoint = checkpoint
+    task.status = "pending"
+    task.next_retry_at = None
+
+    result = await db.execute(select(Resource).where(Resource.id == task.resource_id))
+    resource = result.scalar_one_or_none()
+    if resource:
+        resource.status = "待转存"
+
+    await db.commit()
+    return {"ok": True, "status": task.status}

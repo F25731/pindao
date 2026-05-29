@@ -3,6 +3,7 @@
 单个资源的完整转存流程，带 checkpoint 断点续跑。
 """
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from secrets import token_hex
 from typing import Optional
@@ -49,6 +50,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
     checkpoint = task.checkpoint or {}
 
     try:
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
         # STEP 1: 选择账号
         if "account_id" not in checkpoint:
             account = await select_available_account(db)
@@ -78,6 +82,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             device_id=account.device_id,
         )
 
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
         # STEP 2: 获取分享访问令牌
         if "share_access_token" not in checkpoint:
             try:
@@ -98,6 +105,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             task.checkpoint = checkpoint
             await db.commit()
 
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
         # STEP 3: 获取分享文件列表
         if "file_ids" not in checkpoint:
             try:
@@ -117,6 +127,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             task.checkpoint = checkpoint
             await db.commit()
 
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
         # STEP 4: 转存到自己账号
         if "restore_done" not in checkpoint:
             try:
@@ -131,13 +144,19 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
             checkpoint["restore_done"] = True
             checkpoint["restore_resp"] = restore_resp
+            transferred_file_ids = _extract_restored_file_ids(restore_resp)
+            if transferred_file_ids:
+                checkpoint["transferred_file_ids"] = transferred_file_ids
             task.checkpoint = checkpoint
             await db.commit()
+
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
 
         # STEP 5: 创建新分享
         if "new_share_link" not in checkpoint:
             # 获取转存后的文件 ID
-            transferred_file_ids = checkpoint["file_ids"]
+            transferred_file_ids = checkpoint.get("transferred_file_ids") or checkpoint["file_ids"]
 
             new_code = generate_extract_code()
             try:
@@ -160,7 +179,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                     pass
 
             if not new_share_id:
-                await _fail_retryable(db, task, resource, "创建分享成功但无法获取分享ID", retry_minutes=2)
+                checkpoint["share_resp"] = share_resp
+                task.checkpoint = checkpoint
+                await _fail_retryable(db, task, resource, "创建分享成功但无法获取分享ID", share_resp, retry_minutes=2)
                 return
 
             new_link = build_share_link(new_share_id, new_code)
@@ -170,10 +191,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             task.checkpoint = checkpoint
             await db.commit()
 
+        if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
         # STEP 6: 更新资源记录，标记成功
         resource.status = "待推送"
         resource.transfer_account_id = account.id
-        resource.transferred_file_id = ",".join(checkpoint.get("file_ids", []))
+        resource.transferred_file_id = ",".join(checkpoint.get("transferred_file_ids") or checkpoint.get("file_ids", []))
         resource.new_share_id = checkpoint["new_share_id"]
         resource.new_extract_code = checkpoint["new_extract_code"]
         resource.new_share_link = checkpoint["new_share_link"]
@@ -205,6 +229,36 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
 # ===== 辅助函数 =====
 
+async def _pause_if_requested(
+    db: AsyncSession,
+    task: Task,
+    resource: Resource,
+    checkpoint: dict,
+) -> bool:
+    await db.refresh(task)
+    checkpoint.update(task.checkpoint or {})
+    if task.status == "cancel_requested" or checkpoint.get("cancel_requested"):
+        checkpoint.pop("cancel_requested", None)
+        task.status = "skipped"
+        task.checkpoint = checkpoint
+        task.completed_at = datetime.now(timezone.utc)
+        resource.status = "已取消"
+        await db.commit()
+        logger.info(f"任务已取消: task_id={task.id}, resource_id={resource.id}")
+        return True
+
+    if task.status != "pause_requested" and not checkpoint.get("pause_requested"):
+        return False
+
+    checkpoint.pop("pause_requested", None)
+    task.status = "paused"
+    task.checkpoint = checkpoint
+    resource.status = "转存暂停"
+    await db.commit()
+    logger.info(f"任务已暂停: task_id={task.id}, resource_id={resource.id}")
+    return True
+
+
 def _extract_access_token(resp: dict) -> Optional[str]:
     if isinstance(resp, dict):
         data = resp.get("data", resp)
@@ -220,19 +274,24 @@ def _extract_file_ids(resp: dict) -> list:
     return []
 
 
+def _extract_restored_file_ids(resp: dict) -> list:
+    ids = _collect_values(resp, ("fileId", "fileID", "resId"))
+    return _dedupe_ids(ids)
+
+
 def _extract_new_share_id(resp: dict) -> Optional[str]:
-    if isinstance(resp, dict):
-        data = resp.get("data", resp)
-        # 优先找带 _ 的完整 publicShareId
-        for key in ("publicShareId", "shareId", "id"):
-            val = data.get(key)
-            if val and "_" in str(val):
-                return str(val)
-        # 退而求其次
-        for key in ("publicShareId", "shareId", "id"):
-            val = data.get(key)
-            if val:
-                return str(val)
+    candidates = _collect_values(
+        resp,
+        ("publicShareId", "public_share_id", "shareId", "share_id", "sid", "id", "url", "shareUrl", "shareLink"),
+    )
+    for val in candidates:
+        sid = _normalize_share_id(val)
+        if sid and "_" in sid:
+            return sid
+    for val in candidates:
+        sid = _normalize_share_id(val)
+        if sid:
+            return sid
     return None
 
 
@@ -241,10 +300,50 @@ def _find_share_id_from_list(resp: dict, title: str) -> Optional[str]:
         data = resp.get("data", resp)
         shares = data.get("list") or data.get("shares") or []
         for s in shares:
-            sid = s.get("publicShareId") or s.get("id") or ""
-            if "_" in str(sid):
-                return str(sid)
+            if title and s.get("title") and s.get("title") != title:
+                continue
+            sid = _extract_new_share_id(s)
+            if sid:
+                return sid
+        for s in shares:
+            sid = _extract_new_share_id(s)
+            if sid:
+                return sid
     return None
+
+
+def _collect_values(value, keys: tuple[str, ...]) -> list:
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and item:
+                found.append(item)
+            found.extend(_collect_values(item, keys))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_collect_values(item, keys))
+    return found
+
+
+def _dedupe_ids(values: list) -> list:
+    ids = []
+    seen = set()
+    for val in values:
+        text = str(val)
+        if text and text not in seen:
+            seen.add(text)
+            ids.append(text)
+    return ids
+
+
+def _normalize_share_id(value) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"/s/([^/?#]+)", text)
+    if match:
+        return match.group(1)
+    return text
 
 
 async def _fail_retryable(
