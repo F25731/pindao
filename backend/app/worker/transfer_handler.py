@@ -96,9 +96,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 await _handle_share_error(db, task, resource, account, e)
                 return
 
+            if _has_api_error(token_resp):
+                await _fail_final(db, task, resource, _format_api_error("获取分享访问令牌失败", token_resp), token_resp)
+                return
+
             share_token = _extract_access_token(token_resp)
             if not share_token:
-                await _fail_final(db, task, resource, "获取分享访问令牌失败", token_resp)
+                await _fail_final(db, task, resource, _format_api_error("获取分享访问令牌失败", token_resp), token_resp)
                 return
 
             checkpoint["share_access_token"] = share_token
@@ -118,9 +122,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 await _handle_share_error(db, task, resource, account, e)
                 return
 
+            if _has_api_error(files_resp):
+                await _fail_final(db, task, resource, _format_api_error("获取分享文件列表失败", files_resp), files_resp)
+                return
+
             file_ids = _extract_file_ids(files_resp)
             if not file_ids:
-                await _fail_final(db, task, resource, "分享文件列表为空", files_resp)
+                await _fail_final(db, task, resource, _format_api_error("分享文件列表为空", files_resp), files_resp)
                 return
 
             checkpoint["file_ids"] = file_ids
@@ -142,9 +150,22 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 await _handle_transfer_error(db, task, resource, account, e)
                 return
 
+            if _has_api_error(restore_resp):
+                await _handle_transfer_business_error(
+                    db, task, resource, account, restore_resp, checkpoint, "转存失败"
+                )
+                return
+
             checkpoint["restore_done"] = True
             checkpoint["restore_resp"] = restore_resp
             transferred_file_ids = _extract_restored_file_ids(restore_resp)
+            if not transferred_file_ids:
+                try:
+                    file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
+                    transferred_file_ids = _find_file_ids_from_list(file_list_resp, resource.name)
+                    checkpoint["file_list_resp"] = file_list_resp
+                except Exception:
+                    pass
             if transferred_file_ids:
                 checkpoint["transferred_file_ids"] = transferred_file_ids
             task.checkpoint = checkpoint
@@ -156,7 +177,17 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
         # STEP 5: 创建新分享
         if "new_share_link" not in checkpoint:
             # 获取转存后的文件 ID
-            transferred_file_ids = checkpoint.get("transferred_file_ids") or checkpoint["file_ids"]
+            transferred_file_ids = checkpoint.get("transferred_file_ids")
+            if not transferred_file_ids:
+                await _fail_retryable(
+                    db,
+                    task,
+                    resource,
+                    _format_api_error("转存成功但无法获取新文件ID", checkpoint.get("restore_resp")),
+                    checkpoint.get("restore_resp"),
+                    retry_minutes=2,
+                )
+                return
 
             new_code = generate_extract_code()
             try:
@@ -167,6 +198,14 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
             except httpx.HTTPStatusError as e:
                 await _handle_transfer_error(db, task, resource, account, e)
+                return
+
+            if _has_api_error(share_resp):
+                checkpoint["share_resp"] = share_resp
+                task.checkpoint = checkpoint
+                await _handle_transfer_business_error(
+                    db, task, resource, account, share_resp, checkpoint, "创建分享失败"
+                )
                 return
 
             new_share_id = _extract_new_share_id(share_resp)
@@ -181,7 +220,14 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             if not new_share_id:
                 checkpoint["share_resp"] = share_resp
                 task.checkpoint = checkpoint
-                await _fail_retryable(db, task, resource, "创建分享成功但无法获取分享ID", share_resp, retry_minutes=2)
+                await _fail_retryable(
+                    db,
+                    task,
+                    resource,
+                    _format_api_error("创建分享成功但无法获取分享ID", share_resp),
+                    share_resp,
+                    retry_minutes=2,
+                )
                 return
 
             new_link = build_share_link(new_share_id, new_code)
@@ -312,6 +358,27 @@ def _find_share_id_from_list(resp: dict, title: str) -> Optional[str]:
     return None
 
 
+def _find_file_ids_from_list(resp: dict, title: str) -> list:
+    if not isinstance(resp, dict):
+        return []
+    data = resp.get("data", resp)
+    files = data.get("list") or data.get("files") or data.get("fileList") or []
+    matched = []
+    for item in files:
+        if title and item.get("name") and item.get("name") != title:
+            continue
+        file_id = item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
+        if file_id:
+            matched.append(file_id)
+    if matched:
+        return _dedupe_ids(matched)
+    return _dedupe_ids([
+        item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
+        for item in files
+        if item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
+    ])
+
+
 def _collect_values(value, keys: tuple[str, ...]) -> list:
     found = []
     if isinstance(value, dict):
@@ -344,6 +411,34 @@ def _normalize_share_id(value) -> Optional[str]:
     if match:
         return match.group(1)
     return text
+
+
+def _has_api_error(resp: dict) -> bool:
+    if not isinstance(resp, dict):
+        return False
+    code = resp.get("code")
+    if code is not None and str(code) not in ("0", "200"):
+        return True
+    if resp.get("error") is True:
+        return True
+    success = resp.get("success")
+    if success is False:
+        return True
+    return False
+
+
+def _format_api_error(prefix: str, resp: dict = None) -> str:
+    if not isinstance(resp, dict):
+        return prefix
+    msg = resp.get("msg") or resp.get("message") or resp.get("error") or resp.get("raw")
+    code = resp.get("code")
+    parts = [prefix]
+    if msg:
+        parts.append(str(msg))
+    text = "：".join(parts)
+    if code is not None:
+        text = f"{text} (code={code})"
+    return text[:500]
 
 
 async def _fail_retryable(
@@ -380,6 +475,42 @@ async def _fail_final(
     logger.error(f"任务最终失败: task_id={task.id}, msg={message}")
 
 
+async def _handle_transfer_business_error(
+    db: AsyncSession,
+    task: Task,
+    resource: Resource,
+    account: GuangyaAccount,
+    resp_body: dict,
+    checkpoint: dict,
+    prefix: str,
+):
+    message = _format_api_error(prefix, resp_body)
+    raw_text = str(resp_body)
+
+    if resp_body.get("code") in (401, "401") or "登录" in raw_text or "token" in raw_text.lower():
+        await mark_account_expired(db, account)
+        checkpoint.pop("account_id", None)
+        task.checkpoint = checkpoint
+        await _fail_retryable(db, task, resource, message, resp_body)
+    elif resp_body.get("code") in (429, "429") or "风控" in raw_text or "频繁" in raw_text:
+        await mark_account_rate_limited(db, account)
+        await _fail_retryable(db, task, resource, message, resp_body, retry_minutes=10)
+    elif (
+        resp_body.get("code") in (157, 507, "157", "507")
+        or "容量" in raw_text
+        or "空间不足" in raw_text
+    ):
+        await mark_account_full(db, account)
+        checkpoint.pop("account_id", None)
+        task.checkpoint = checkpoint
+        await _fail_retryable(db, task, resource, message, resp_body)
+    elif resp_body.get("code") in (143, 404, "143", "404") or "文件不存在" in raw_text:
+        await _fail_final(db, task, resource, message, resp_body)
+    else:
+        await mark_account_error(db, account, message)
+        await _fail_retryable(db, task, resource, message, resp_body)
+
+
 async def _handle_share_error(
     db: AsyncSession, task: Task, resource: Resource,
     account: GuangyaAccount, error: httpx.HTTPStatusError,
@@ -391,11 +522,11 @@ async def _handle_share_error(
         resp_body = {"raw": error.response.text[:500]}
 
     if status_code == 404:
-        await _fail_final(db, task, resource, "分享链接无效或已失效", resp_body)
+        await _fail_final(db, task, resource, _format_api_error("分享链接无效或已失效", resp_body), resp_body)
     elif status_code == 403:
-        await _fail_final(db, task, resource, "提取码错误或无权访问", resp_body)
+        await _fail_final(db, task, resource, _format_api_error("提取码错误或无权访问", resp_body), resp_body)
     else:
-        await _fail_retryable(db, task, resource, f"分享接口错误 HTTP {status_code}", resp_body)
+        await _fail_retryable(db, task, resource, _format_api_error(f"分享接口错误 HTTP {status_code}", resp_body), resp_body)
 
 
 async def _handle_transfer_error(
@@ -410,17 +541,17 @@ async def _handle_transfer_error(
 
     if status_code == 401:
         await mark_account_expired(db, account)
-        await _fail_retryable(db, task, resource, "账号登录失效", resp_body)
+        await _fail_retryable(db, task, resource, _format_api_error("账号登录失效", resp_body), resp_body)
     elif status_code == 429:
         await mark_account_rate_limited(db, account)
-        await _fail_retryable(db, task, resource, "账号被风控限制", resp_body, retry_minutes=10)
-    elif status_code == 507 or "容量" in str(resp_body):
+        await _fail_retryable(db, task, resource, _format_api_error("账号被风控限制", resp_body), resp_body, retry_minutes=10)
+    elif status_code == 507 or "容量" in str(resp_body) or "空间不足" in str(resp_body):
         await mark_account_full(db, account)
         # 清除 checkpoint 中的 account_id，下次重试会选新账号
         checkpoint = task.checkpoint or {}
         checkpoint.pop("account_id", None)
         task.checkpoint = checkpoint
-        await _fail_retryable(db, task, resource, "账号容量不足", resp_body)
+        await _fail_retryable(db, task, resource, _format_api_error("账号容量不足", resp_body), resp_body)
     else:
         await mark_account_error(db, account, f"HTTP {status_code}")
-        await _fail_retryable(db, task, resource, f"转存接口错误 HTTP {status_code}", resp_body)
+        await _fail_retryable(db, task, resource, _format_api_error(f"转存接口错误 HTTP {status_code}", resp_body), resp_body)
