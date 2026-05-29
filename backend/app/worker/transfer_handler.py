@@ -9,7 +9,7 @@ from secrets import token_hex
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 import httpx
 
 from app.models import Task, Resource, GuangyaAccount
@@ -52,6 +52,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
     try:
         if await _pause_if_requested(db, task, resource, checkpoint):
+            return
+
+        if not checkpoint and await _skip_if_exact_duplicate(db, task, resource):
             return
 
         # STEP 1: 选择账号
@@ -293,6 +296,51 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
 
 # ===== 辅助函数 =====
+
+async def _skip_if_exact_duplicate(
+    db: AsyncSession,
+    task: Task,
+    resource: Resource,
+) -> bool:
+    conditions = []
+    if resource.original_link:
+        conditions.append(Resource.original_link == resource.original_link)
+    if resource.share_id:
+        extract_code = resource.extract_code or ""
+        if extract_code:
+            extract_condition = Resource.extract_code == extract_code
+        else:
+            extract_condition = or_(Resource.extract_code == "", Resource.extract_code.is_(None))
+        conditions.append(and_(Resource.share_id == resource.share_id, extract_condition))
+    if not conditions:
+        return False
+
+    result = await db.execute(
+        select(Resource).where(
+            Resource.id != resource.id,
+            Resource.status.notin_(["精确重复已跳过", "人工确认跳过", "已取消"]),
+            or_(*conditions),
+        ).order_by(Resource.id.asc()).limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    if not existing:
+        return False
+
+    message = f"转存前发现数据库已有重复资源，已跳过；重复资源ID={existing.id}"
+    resource.status = "精确重复已跳过"
+    resource.duplicate_of_id = existing.id
+    resource.error_message = message
+    task.status = "skipped"
+    task.error_message = message
+    task.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info(
+        "转存前精确去重跳过: task_id=%s, resource_id=%s, duplicate_of=%s",
+        task.id,
+        resource.id,
+        existing.id,
+    )
+    return True
 
 async def _pause_if_requested(
     db: AsyncSession,

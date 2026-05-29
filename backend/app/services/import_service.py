@@ -9,6 +9,7 @@ from app.utils.link_parser import parse_share_link, normalize_name, parse_tags
 from app.utils.fuzzy_match import is_fuzzy_duplicate
 
 DEDUP_BATCH_SIZE = 1000
+FUZZY_CANDIDATE_LIMIT = 5000
 
 
 async def process_import(
@@ -20,7 +21,8 @@ async def process_import(
     """
     流式导入，分批处理。支持百万级数据。
     每 2000 行为一批：解析 → 去重 → 写入 → commit。
-    疑似重复检测只对前 2000 条已有资源做比对，避免 O(n^2)。
+    疑似重复检测保留一个最近候选窗口，并把本次导入的新资源加入窗口，
+    这样同一个文件里相近但不完全相同的资源也会进入人工审核。
     """
     batch = ImportBatch(
         filename=original_filename,
@@ -42,7 +44,7 @@ async def process_import(
     seen_links: Set[str] = set()
     seen_share_keys: Set[str] = set()
 
-    # 预加载疑似重复候选（只取最近 2000 条）
+    # 预加载疑似重复候选，并在导入过程中动态追加本次新增资源。
     fuzzy_candidates = await _load_fuzzy_candidates(db)
 
     for row_batch in read_file_stream(file_path, batch_size=2000):
@@ -141,6 +143,12 @@ async def process_import(
                     status="pending",
                 ))
                 new_count += 1
+            _remember_fuzzy_candidate(
+                fuzzy_candidates,
+                resource.id,
+                name_norm,
+                tags_list,
+            )
 
         if tasks_to_add:
             db.add_all(tasks_to_add)
@@ -177,9 +185,20 @@ async def _load_fuzzy_candidates(db: AsyncSession):
         select(Resource.id, Resource.name_normalized, Resource.tags_array).where(
             Resource.name_normalized.isnot(None),
             Resource.status.notin_(["精确重复已跳过", "人工确认跳过"]),
-        ).order_by(Resource.id.desc()).limit(2000)
+        ).order_by(Resource.id.desc()).limit(FUZZY_CANDIDATE_LIMIT)
     )
     return [(r[0], r[1] or "", r[2] or []) for r in result.all()]
+
+
+def _remember_fuzzy_candidate(
+    candidates: list[tuple[int, str, list]],
+    resource_id: int,
+    name_normalized: str,
+    tags_array: list,
+) -> None:
+    candidates.insert(0, (resource_id, name_normalized or "", tags_array or []))
+    if len(candidates) > FUZZY_CANDIDATE_LIMIT:
+        candidates.pop()
 
 
 async def _batch_check_links(db: AsyncSession, links: list) -> Set[str]:

@@ -4,6 +4,7 @@
       <n-tag type="warning">待审核: {{ stats.pending || 0 }}</n-tag>
       <n-tag type="success">已处理: {{ stats.resolved || 0 }}</n-tag>
       <n-button type="primary" :disabled="!selectedIds.length" @click="batchDecide('skip')">批量跳过</n-button>
+      <n-button :disabled="!selectedIds.length" @click="batchDecide('use_new')">批量使用当前</n-button>
       <n-button :disabled="!selectedIds.length" @click="batchDecide('keep_both')">批量都保留</n-button>
     </n-space>
 
@@ -60,11 +61,34 @@ const showDetail = ref(false)
 const detailData = ref<any>(null)
 const currentReviewId = ref<number | null>(null)
 
+function resourceCell(nameKey: string, idKey: string, statusKey: string, tagsKey: string) {
+  return (row: any) => h('div', { class: 'resource-cell' }, [
+    h('div', { class: 'resource-title' }, row[nameKey] || `资源 #${row[idKey]}`),
+    h('div', { class: 'resource-meta' }, [
+      `#${row[idKey]}`,
+      row[statusKey] ? ` · ${row[statusKey]}` : '',
+      row[tagsKey] ? ` · ${row[tagsKey]}` : '',
+    ]),
+  ])
+}
+
 const columns = [
   { type: 'selection' as const },
   { title: 'ID', key: 'id', width: 60 },
-  { title: '新资源ID', key: 'new_resource_id', width: 90 },
-  { title: '已有资源ID', key: 'existing_resource_id', width: 100 },
+  {
+    title: '当前导入资源',
+    key: 'new_name',
+    minWidth: 220,
+    ellipsis: { tooltip: true },
+    render: resourceCell('new_name', 'new_resource_id', 'new_status', 'new_tags'),
+  },
+  {
+    title: '数据库已有资源',
+    key: 'existing_name',
+    minWidth: 220,
+    ellipsis: { tooltip: true },
+    render: resourceCell('existing_name', 'existing_resource_id', 'existing_status', 'existing_tags'),
+  },
   {
     title: '相似度', key: 'similarity_score', width: 80,
     render: (row: any) => `${(row.similarity_score * 100).toFixed(0)}%`
@@ -132,3 +156,24 @@ async function loadData() {
 
 onMounted(loadData)
 </script>
+
+<style scoped>
+.resource-cell {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.resource-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-meta {
+  color: #8c8c8c;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
