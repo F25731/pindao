@@ -22,6 +22,7 @@ from app.services.account_pool import (
     mark_account_expired,
     mark_account_rate_limited,
     reset_account_error,
+    refresh_account_capacity,
     update_account_tokens,
 )
 from app.utils.link_parser import build_share_link
@@ -75,6 +76,24 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 await db.commit()
                 await _fail_retryable(db, task, resource, "分配的账号不可用，将重新选择")
                 return
+
+        try:
+            await refresh_account_capacity(db, account)
+            if account.status == "full":
+                checkpoint.pop("account_id", None)
+                task.checkpoint = checkpoint
+                await _continue_with_new_account(
+                    db,
+                    task,
+                    resource,
+                    "账号容量已满，已切换账号等待继续",
+                    {"account_id": account.id, "used": account.used_capacity_bytes, "total": account.total_capacity_bytes},
+                )
+                return
+            await db.commit()
+        except Exception as exc:
+            account.last_error = f"刷新容量失败: {str(exc)[:200]}"
+            await db.commit()
 
         client = GuangyaClient(
             access_token=account.access_token,
@@ -475,6 +494,24 @@ async def _fail_final(
     logger.error(f"任务最终失败: task_id={task.id}, msg={message}")
 
 
+async def _continue_with_new_account(
+    db: AsyncSession,
+    task: Task,
+    resource: Resource,
+    message: str,
+    resp: dict = None,
+):
+    task.status = "pending"
+    task.error_message = message
+    task.error_response = resp
+    task.next_retry_at = None
+    resource.status = "待转存"
+    resource.error_message = message
+    resource.error_response = resp
+    await db.commit()
+    logger.warning(f"任务切换账号继续: task_id={task.id}, msg={message}")
+
+
 async def _handle_transfer_business_error(
     db: AsyncSession,
     task: Task,
@@ -503,7 +540,7 @@ async def _handle_transfer_business_error(
         await mark_account_full(db, account)
         checkpoint.pop("account_id", None)
         task.checkpoint = checkpoint
-        await _fail_retryable(db, task, resource, message, resp_body)
+        await _continue_with_new_account(db, task, resource, message, resp_body)
     elif resp_body.get("code") in (143, 404, "143", "404") or "文件不存在" in raw_text:
         await _fail_final(db, task, resource, message, resp_body)
     else:

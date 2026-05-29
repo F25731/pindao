@@ -3,6 +3,7 @@
     <n-space style="margin-bottom: 16px;">
       <n-button type="primary" @click="showSmsLogin = true">手机号登录添加</n-button>
       <n-button @click="showTokenAdd = true">Token 直接添加</n-button>
+      <n-button :loading="refreshingAll" @click="refreshAllAccounts">刷新全部容量</n-button>
     </n-space>
 
     <n-data-table :columns="columns" :data="accounts" :loading="loading" :pagination="false" :row-key="(r: any) => r.id" />
@@ -68,7 +69,7 @@
 import { ref, onMounted, h, reactive } from 'vue'
 import {
   NDataTable, NSpace, NButton, NModal, NForm, NFormItem, NInput, NInputNumber,
-  NTag, NSteps, NStep, NAlert, NResult, useMessage
+  NTag, NSteps, NStep, NAlert, NResult, NProgress, useMessage
 } from 'naive-ui'
 import { api } from '../api/client'
 
@@ -77,6 +78,7 @@ const accounts = ref<any[]>([])
 const loading = ref(false)
 const showSmsLogin = ref(false)
 const showTokenAdd = ref(false)
+const refreshingAll = ref(false)
 
 // SMS 登录状态
 const smsStep = ref(1)
@@ -105,6 +107,30 @@ const statusColorMap: Record<string, string> = {
   disabled: 'error',
 }
 
+function formatBytes(value?: number | null) {
+  if (!value) return '-'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = Number(value)
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit += 1
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+function usagePercent(row: any) {
+  if (!row.total_capacity_bytes || !row.used_capacity_bytes) return 0
+  return Math.min(100, Math.round((row.used_capacity_bytes / row.total_capacity_bytes) * 100))
+}
+
+function capacityStatus(row: any) {
+  const percent = usagePercent(row)
+  if (row.status === 'full' || percent >= 95) return 'error'
+  if (percent >= 80) return 'warning'
+  return 'success'
+}
+
 const columns = [
   { title: 'ID', key: 'id', width: 50 },
   { title: '名称', key: 'name', width: 120 },
@@ -113,15 +139,33 @@ const columns = [
     render: (row: any) => h(NTag, { type: (statusColorMap[row.status] || 'default') as any, size: 'small' }, () => row.status)
   },
   { title: '优先级', key: 'priority', width: 70 },
+  {
+    title: '容量', key: 'capacity', width: 220,
+    render: (row: any) => h('div', { style: 'min-width: 180px;' }, [
+      h(NProgress, {
+        type: 'line',
+        percentage: usagePercent(row),
+        status: capacityStatus(row) as any,
+        indicatorPlacement: 'inside',
+        height: 18,
+        processing: row.status === 'available' && usagePercent(row) >= 80,
+      }),
+      h('div', { style: 'margin-top: 4px; font-size: 12px; color: #666;' }, `${formatBytes(row.used_capacity_bytes)} / ${formatBytes(row.total_capacity_bytes)}`),
+    ])
+  },
   { title: '已处理', key: 'processed_count', width: 70 },
   { title: '错误次数', key: 'error_count', width: 80 },
   { title: '最近错误', key: 'last_error', width: 150, ellipsis: { tooltip: true } },
   { title: '最近使用', key: 'last_used_at', width: 160, render: (row: any) => row.last_used_at?.slice(0, 19).replace('T', ' ') || '-' },
   {
-    title: '操作', key: 'actions', width: 120,
+    title: '操作', key: 'actions', width: 220,
     render: (row: any) => h(NSpace, {}, () => [
+      h(NButton, { size: 'small', onClick: () => refreshAccount(row.id) }, () => '刷新容量'),
+      row.status !== 'available'
+        ? h(NButton, { size: 'small', type: 'primary', onClick: () => enableAccount(row.id) }, () => '启用')
+        : null,
       h(NButton, { size: 'small', type: 'error', onClick: () => deleteAccount(row.id) }, () => '删除'),
-    ])
+    ].filter(Boolean))
   },
 ]
 
@@ -222,6 +266,39 @@ async function deleteAccount(id: number) {
     loadData()
   } catch (e: any) {
     message.error('删除失败')
+  }
+}
+
+async function refreshAccount(id: number) {
+  try {
+    await api.post(`/api/accounts/${id}/refresh`)
+    message.success('容量已刷新')
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '刷新失败')
+  }
+}
+
+async function refreshAllAccounts() {
+  refreshingAll.value = true
+  try {
+    const res = await api.post('/api/accounts/refresh-all')
+    message.success(`刷新完成：成功 ${res.data.refreshed || 0} 个，失败 ${res.data.failed || 0} 个`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '刷新失败')
+  } finally {
+    refreshingAll.value = false
+  }
+}
+
+async function enableAccount(id: number) {
+  try {
+    await api.post(`/api/accounts/${id}/enable`)
+    message.success('账号已启用')
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '启用失败')
   }
 }
 

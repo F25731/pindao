@@ -33,6 +33,8 @@ const pageCount = computed(() => Math.ceil(total.value / pageSize))
 const statusOptions = [
   { label: '待转存', value: '待转存' },
   { label: '转存中', value: '转存中' },
+  { label: '转存暂停', value: '转存暂停' },
+  { label: '已取消', value: '已取消' },
   { label: '转存成功', value: '转存成功' },
   { label: '待推送', value: '待推送' },
   { label: '已推送', value: '已推送' },
@@ -46,6 +48,8 @@ const statusOptions = [
 const statusColorMap: Record<string, string> = {
   '待转存': 'default',
   '转存中': 'info',
+  '转存暂停': 'warning',
+  '已取消': 'default',
   '转存成功': 'success',
   '待推送': 'warning',
   '已推送': 'success',

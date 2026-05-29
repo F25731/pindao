@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.models import GuangyaAccount
+from app.services.guangya_client import GuangyaClient
 
 
 async def select_available_account(db: AsyncSession) -> Optional[GuangyaAccount]:
@@ -22,6 +23,77 @@ async def select_available_account(db: AsyncSession) -> Optional[GuangyaAccount]
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+def _collect_first_number(value, keys: tuple[str, ...]) -> Optional[int]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and item is not None:
+                try:
+                    return int(item)
+                except (TypeError, ValueError):
+                    pass
+            found = _collect_first_number(item, keys)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _collect_first_number(item, keys)
+            if found is not None:
+                return found
+    return None
+
+
+async def refresh_account_capacity(db: AsyncSession, account: GuangyaAccount) -> dict:
+    client = GuangyaClient(
+        access_token=account.access_token,
+        refresh_token=account.refresh_token,
+        device_id=account.device_id,
+    )
+    info = await client.user_info()
+
+    total = _collect_first_number(
+        info,
+        ("totalCapacity", "total_capacity", "totalSpace", "total_space", "capacity", "quota", "total"),
+    )
+    used = _collect_first_number(
+        info,
+        ("usedCapacity", "used_capacity", "usedSpace", "used_space", "used", "usage"),
+    )
+
+    if total is not None:
+        account.total_capacity_bytes = total
+    if used is not None:
+        account.used_capacity_bytes = used
+
+    if total is not None and used is not None:
+        if total > 0 and used >= total:
+            account.status = "full"
+            account.last_error = "容量不足"
+        elif account.status == "full" and used < total:
+            account.status = "available"
+            account.last_error = None
+
+    if client.access_token != account.access_token:
+        account.access_token = client.access_token
+        account.refresh_token = client.refresh_token_value
+
+    await db.flush()
+    return info
+
+
+async def refresh_available_account_capacities(db: AsyncSession):
+    result = await db.execute(
+        select(GuangyaAccount).where(GuangyaAccount.status == "available")
+    )
+    accounts = result.scalars().all()
+    for account in accounts:
+        try:
+            await refresh_account_capacity(db, account)
+        except Exception as exc:
+            account.error_count += 1
+            account.last_error = f"刷新容量失败: {str(exc)[:200]}"
+            await db.flush()
 
 
 async def mark_account_used(db: AsyncSession, account: GuangyaAccount):

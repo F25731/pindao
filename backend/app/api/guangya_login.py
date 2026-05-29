@@ -11,6 +11,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, GuangyaAccount
 from app.config import settings
+from app.services.account_pool import refresh_account_capacity
 
 router = APIRouter()
 
@@ -264,6 +265,11 @@ async def sms_signin(
         priority=0,
     )
     db.add(account)
+    await db.flush()
+    try:
+        await refresh_account_capacity(db, account)
+    except Exception as exc:
+        account.last_error = f"刷新容量失败: {str(exc)[:200]}"
     await db.commit()
     await db.refresh(account)
 

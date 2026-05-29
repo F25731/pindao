@@ -8,6 +8,7 @@ from datetime import datetime
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import GuangyaAccount, AdminUser
+from app.services.account_pool import refresh_account_capacity
 
 router = APIRouter()
 
@@ -61,6 +62,27 @@ async def list_accounts(
     return result.scalars().all()
 
 
+@router.post("/refresh-all")
+async def refresh_all_accounts(
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(select(GuangyaAccount).order_by(GuangyaAccount.id))
+    accounts = result.scalars().all()
+    refreshed = 0
+    failed = 0
+    for account in accounts:
+        try:
+            await refresh_account_capacity(db, account)
+            refreshed += 1
+        except Exception as exc:
+            account.error_count += 1
+            account.last_error = f"刷新容量失败: {str(exc)[:200]}"
+            failed += 1
+    await db.commit()
+    return {"ok": True, "refreshed": refreshed, "failed": failed}
+
+
 @router.post("", response_model=AccountOut)
 async def create_account(
     req: AccountCreate,
@@ -79,6 +101,11 @@ async def create_account(
         priority=req.priority,
     )
     db.add(account)
+    await db.flush()
+    try:
+        await refresh_account_capacity(db, account)
+    except Exception as exc:
+        account.last_error = f"刷新容量失败: {str(exc)[:200]}"
     await db.commit()
     await db.refresh(account)
     return account
@@ -96,6 +123,51 @@ async def get_account(
     account = result.scalar_one_or_none()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
+    return account
+
+
+@router.post("/{account_id}/refresh", response_model=AccountOut)
+async def refresh_account(
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(GuangyaAccount).where(GuangyaAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    try:
+        await refresh_account_capacity(db, account)
+        account.last_error = None if account.status == "available" else account.last_error
+    except Exception as exc:
+        account.error_count += 1
+        account.last_error = f"刷新容量失败: {str(exc)[:200]}"
+        await db.commit()
+        raise HTTPException(status_code=400, detail=account.last_error)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@router.post("/{account_id}/enable", response_model=AccountOut)
+async def enable_account(
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(GuangyaAccount).where(GuangyaAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    account.status = "available"
+    account.error_count = 0
+    account.last_error = None
+    await db.commit()
+    await db.refresh(account)
     return account
 
 
