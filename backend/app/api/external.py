@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.database import get_db
-from app.models import Resource, ApiKey
+from app.models import Resource, ApiKey, TelegramPushRecord
 from app.utils.security import hash_api_key
 
 router = APIRouter()
@@ -37,6 +37,7 @@ class PushItem(BaseModel):
     share_link: Optional[str]
     extract_code: Optional[str]
     transferred_at: Optional[datetime]
+    text: str
 
 
 class CallbackRequest(BaseModel):
@@ -44,6 +45,28 @@ class CallbackRequest(BaseModel):
     status: str  # success / failed
     error_message: Optional[str] = None
     message_id: Optional[str] = None
+    response_payload: Optional[dict] = None
+
+
+def build_push_text(resource: Resource) -> str:
+    link = resource.new_share_link or resource.original_link
+    return "\n".join([
+        f"名称：{resource.name}",
+        f"标签：{resource.tags or ''}",
+        f"链接：{link or ''}",
+    ])
+
+
+def build_push_item(resource: Resource) -> PushItem:
+    return PushItem(
+        id=resource.id,
+        name=resource.name,
+        tags=resource.tags,
+        share_link=resource.new_share_link,
+        extract_code=resource.new_extract_code,
+        transferred_at=resource.transferred_at,
+        text=build_push_text(resource),
+    )
 
 
 @router.get("/push/health")
@@ -53,7 +76,7 @@ async def health(api_key: ApiKey = Depends(verify_api_key)):
 
 @router.get("/push/pending")
 async def get_pending(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     api_key: ApiKey = Depends(verify_api_key),
 ):
@@ -65,16 +88,7 @@ async def get_pending(
     )
     resources = result.scalars().all()
 
-    items = []
-    for r in resources:
-        items.append(PushItem(
-            id=r.id,
-            name=r.name,
-            tags=r.tags,
-            share_link=r.new_share_link,
-            extract_code=r.new_extract_code,
-            transferred_at=r.transferred_at,
-        ))
+    items = [build_push_item(r) for r in resources]
 
     total_result = await db.execute(
         select(func.count(Resource.id)).where(Resource.status == "待推送")
@@ -82,6 +96,61 @@ async def get_pending(
     total = total_result.scalar()
 
     return {"items": items, "total_pending": total}
+
+
+@router.post("/push/lease")
+async def lease_pending(
+    limit: int = Query(10, ge=1, le=100),
+    retry_stale_minutes: int = Query(30, ge=5, le=1440),
+    db: AsyncSession = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
+    stale_before = datetime.now(timezone.utc) - timedelta(minutes=retry_stale_minutes)
+    stale_result = await db.execute(
+        select(Resource).where(
+            Resource.status == "推送中",
+            Resource.pushed_at.is_(None),
+            Resource.updated_at < stale_before,
+        ).limit(500)
+    )
+    for resource in stale_result.scalars().all():
+        resource.status = "推送失败待重试"
+        resource.error_message = "推送领取后超时未回调，已自动回到可重试状态"
+
+    result = await db.execute(
+        select(Resource)
+        .where(Resource.status.in_(("待推送", "推送失败待重试")))
+        .order_by(Resource.transferred_at.asc().nullslast(), Resource.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+    )
+    resources = result.scalars().all()
+
+    now = datetime.now(timezone.utc)
+    items = []
+    for resource in resources:
+        resource.status = "推送中"
+        resource.error_message = None
+        payload = build_push_item(resource).model_dump(mode="json")
+        db.add(TelegramPushRecord(
+            resource_id=resource.id,
+            status="running",
+            push_payload=payload,
+            attempt=1,
+        ))
+        items.append(payload)
+
+    await db.commit()
+
+    total_result = await db.execute(
+        select(func.count(Resource.id)).where(Resource.status.in_(("待推送", "推送失败待重试")))
+    )
+    return {
+        "items": items,
+        "leased": len(items),
+        "total_available": total_result.scalar(),
+        "leased_at": now,
+    }
 
 
 @router.post("/push/callback")
@@ -100,11 +169,33 @@ async def push_callback(
     if req.status == "success":
         resource.status = "已推送"
         resource.pushed_at = datetime.now(timezone.utc)
+        resource.error_message = None
     elif req.status == "failed":
         resource.status = "推送失败待重试"
         resource.error_message = req.error_message
     else:
         raise HTTPException(status_code=400, detail="无效状态，需为 success 或 failed")
+
+    record_result = await db.execute(
+        select(TelegramPushRecord)
+        .where(
+            TelegramPushRecord.resource_id == resource.id,
+            TelegramPushRecord.status == "running",
+        )
+        .order_by(TelegramPushRecord.created_at.desc())
+        .limit(1)
+    )
+    record = record_result.scalar_one_or_none()
+    if not record:
+        record = TelegramPushRecord(resource_id=resource.id, status="pending")
+        db.add(record)
+    record.status = "success" if req.status == "success" else "failed"
+    record.response_payload = {
+        "message_id": req.message_id,
+        "payload": req.response_payload,
+    }
+    record.error_message = req.error_message
+    record.pushed_at = datetime.now(timezone.utc) if req.status == "success" else None
 
     await db.commit()
     return {"ok": True, "resource_id": resource.id, "new_status": resource.status}

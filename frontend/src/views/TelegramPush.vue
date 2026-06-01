@@ -1,5 +1,11 @@
 <template>
   <div>
+    <n-space style="margin-bottom: 16px;">
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
+      <n-button type="warning" :loading="loading" @click="recoverStuck">恢复卡住的推送</n-button>
+      <n-button type="primary" :loading="loading" @click="requeueFailed">失败重新入队</n-button>
+    </n-space>
+
     <n-grid :cols="4" :x-gap="16" style="margin-bottom: 16px;">
       <n-gi v-for="(value, key) in pushStats" :key="key">
         <n-card size="small">
@@ -16,9 +22,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NGrid, NGi, NCard, NStatistic, NDataTable, NTag } from 'naive-ui'
+import { NGrid, NGi, NCard, NStatistic, NDataTable, NButton, NSpace, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
+const message = useMessage()
 const pushStats = ref<Record<string, number>>({})
 const pendingList = ref<any[]>([])
 const loading = ref(false)
@@ -31,7 +38,7 @@ const columns = [
   { title: '转存时间', key: 'transferred_at', width: 160, render: (row: any) => row.transferred_at?.slice(0, 19).replace('T', ' ') || '-' },
 ]
 
-onMounted(async () => {
+async function loadData() {
   loading.value = true
   try {
     const [statsRes, pendingRes] = await Promise.all([
@@ -43,5 +50,27 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+async function recoverStuck() {
+  try {
+    const res = await api.post('/api/telegram/recover-stuck', null, { params: { minutes: 30 } })
+    message.success(`已恢复 ${res.data.recovered || 0} 条`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '恢复失败')
+  }
+}
+
+async function requeueFailed() {
+  try {
+    const res = await api.post('/api/telegram/requeue-failed')
+    message.success(`已重新入队 ${res.data.queued || 0} 条`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重新入队失败')
+  }
+}
+
+onMounted(loadData)
 </script>

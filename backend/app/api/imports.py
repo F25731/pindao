@@ -57,6 +57,11 @@ async def upload_excel(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+    finally:
+        try:
+            os.remove(file_path)
+        except FileNotFoundError:
+            pass
 
 
 @router.get("/batches", response_model=List[BatchOut])

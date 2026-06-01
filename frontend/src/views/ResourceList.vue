@@ -2,7 +2,7 @@
   <div>
     <n-space style="margin-bottom: 16px;">
       <n-select v-model:value="statusFilter" :options="statusOptions" placeholder="按状态筛选" clearable style="width: 180px;" @update:value="loadData" />
-      <n-input v-model:value="search" placeholder="搜索名称" clearable style="width: 200px;" @clear="loadData" @keyup.enter="loadData" />
+      <n-input v-model:value="search" placeholder="搜名称/标签/源链接/新链接/错误" clearable style="width: 300px;" @clear="loadData" @keyup.enter="loadData" />
       <n-button @click="loadData">搜索</n-button>
     </n-space>
 
@@ -24,7 +24,7 @@ const resources = ref<any[]>([])
 const loading = ref(false)
 const page = ref(1)
 const total = ref(0)
-const pageSize = 20
+const pageSize = 50
 const statusFilter = ref<string | null>(null)
 const search = ref('')
 
@@ -66,7 +66,8 @@ const columns = [
     title: '状态', key: 'status', width: 130,
     render: (row: any) => h(NTag, { type: (statusColorMap[row.status] || 'default') as any, size: 'small' }, () => row.status)
   },
-  { title: '新链接', key: 'new_share_link', width: 200, ellipsis: { tooltip: true } },
+  { title: '源链接', key: 'original_link', width: 220, ellipsis: { tooltip: true } },
+  { title: '新链接', key: 'new_share_link', width: 220, ellipsis: { tooltip: true } },
   { title: '错误', key: 'error_message', width: 150, ellipsis: { tooltip: true } },
   { title: '重试', key: 'retry_count', width: 50 },
   { title: '创建时间', key: 'created_at', width: 160, render: (row: any) => row.created_at?.slice(0, 19).replace('T', ' ') },

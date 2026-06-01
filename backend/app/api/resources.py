@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -44,7 +44,7 @@ class ResourceListResponse(BaseModel):
 @router.get("", response_model=ResourceListResponse)
 async def list_resources(
     page: int = 0,
-    page_size: int = 20,
+    page_size: int = Query(20, ge=1, le=200),
     status: Optional[str] = None,
     batch_id: Optional[int] = None,
     search: Optional[str] = None,
@@ -61,8 +61,18 @@ async def list_resources(
         query = query.where(Resource.batch_id == batch_id)
         count_query = count_query.where(Resource.batch_id == batch_id)
     if search:
-        query = query.where(Resource.name.ilike(f"%{search}%"))
-        count_query = count_query.where(Resource.name.ilike(f"%{search}%"))
+        keyword = f"%{search.strip()}%"
+        search_filter = or_(
+            Resource.name.ilike(keyword),
+            Resource.tags.ilike(keyword),
+            Resource.original_link.ilike(keyword),
+            Resource.new_share_link.ilike(keyword),
+            Resource.share_id.ilike(keyword),
+            Resource.new_share_id.ilike(keyword),
+            Resource.error_message.ilike(keyword),
+        )
+        query = query.where(search_filter)
+        count_query = count_query.where(search_filter)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar()

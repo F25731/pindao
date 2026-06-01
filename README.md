@@ -137,9 +137,28 @@ python -m app.worker.main
 转存成功的资源自动进入「待推送」状态。
 
 外部 API（给 AstrBot 插件使用）:
-- `GET /api/external/push/pending` - 拉取待推送资源
+- `GET /api/external/push/pending` - 只查看待推送资源，不锁定
+- `POST /api/external/push/lease?limit=10` - 领取一批待推送资源，并锁定为「推送中」
 - `POST /api/external/push/callback` - 回调标记已推送/失败
 - 需要 `X-API-Key` header 认证
+
+AstrBot 插件建议流程:
+1. 定时调用 `POST /api/external/push/lease` 领取资源
+2. 使用返回的 `text` 字段直接发送 Telegram，格式为：
+   ```
+   名称：xxx
+   标签：xxx
+   链接：xxx
+   ```
+3. 成功后回调：
+   ```json
+   {"resource_id": 1, "status": "success", "message_id": "telegram message id"}
+   ```
+4. 失败后回调：
+   ```json
+   {"resource_id": 1, "status": "failed", "error_message": "错误原因"}
+   ```
+5. 如果插件宕机导致资源停在「推送中」，后台「推送管理」可以一键恢复卡住的推送。
 
 ## 升级
 
