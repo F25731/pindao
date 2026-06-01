@@ -1,0 +1,6 @@
+name: astrbot_plugin_guangya_push
+desc: 光鸭资源转存系统 Telegram 推送插件，负责领取待推送资源并回调推送结果。
+help: 使用 /gy_bind_push 绑定当前会话，/gy_push_once 手动推送一批，/gy_push_status 查看接口状态。
+version: 0.1.0
+author: Codex
+repo: ""

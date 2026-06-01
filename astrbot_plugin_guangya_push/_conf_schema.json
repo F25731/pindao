@@ -1,0 +1,42 @@
+{
+  "api_base": {
+    "description": "光鸭资源系统后端地址，例如 http://154.201.75.36:8000",
+    "type": "string",
+    "default": "http://127.0.0.1:8000"
+  },
+  "api_key": {
+    "description": "后台 API 密钥页面创建的密钥，插件请求时会放到 X-API-Key",
+    "type": "string",
+    "default": ""
+  },
+  "target_unified_msg_origin": {
+    "description": "推送目标会话。可手动填写，也可以在目标群/频道内发送 /gy_bind_push 自动写入",
+    "type": "string",
+    "default": ""
+  },
+  "enabled": {
+    "description": "是否启用自动轮询推送",
+    "type": "bool",
+    "default": true
+  },
+  "poll_interval_seconds": {
+    "description": "自动轮询间隔，单位秒",
+    "type": "int",
+    "default": 30
+  },
+  "batch_size": {
+    "description": "每次领取多少条资源，建议 1-20",
+    "type": "int",
+    "default": 5
+  },
+  "send_interval_seconds": {
+    "description": "同一批资源之间的发送间隔，避免 Telegram 限流",
+    "type": "float",
+    "default": 1.0
+  },
+  "lease_stale_minutes": {
+    "description": "推送中超过多少分钟没回调视为卡住，下次领取前会恢复为可重试",
+    "type": "int",
+    "default": 30
+  }
+}
