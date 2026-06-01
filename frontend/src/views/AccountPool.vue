@@ -270,12 +270,13 @@ async function handleTokenAdd() {
 }
 
 async function deleteAccount(id: number) {
+  if (!window.confirm('删除未使用账号会直接移除；已被任务或资源引用的账号会改为停用归档。确定继续？')) return
   try {
-    await api.delete(`/api/accounts/${id}`)
-    message.success('已删除')
+    const res = await api.delete(`/api/accounts/${id}`)
+    message.success(res.data.message || (res.data.archived ? '账号已停用归档' : '已删除'))
     loadData()
   } catch (e: any) {
-    message.error('删除失败')
+    message.error(e.response?.data?.detail || '删除失败')
   }
 }
 

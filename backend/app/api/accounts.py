@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import GuangyaAccount, AdminUser
+from app.models import GuangyaAccount, AdminUser, Resource, Task
 from app.services.account_pool import refresh_account_capacity
 
 router = APIRouter()
@@ -204,6 +204,24 @@ async def delete_account(
     account = result.scalar_one_or_none()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
+
+    resource_count = await db.scalar(
+        select(func.count(Resource.id)).where(Resource.transfer_account_id == account_id)
+    )
+    task_count = await db.scalar(
+        select(func.count(Task.id)).where(Task.account_id == account_id)
+    )
+    if resource_count or task_count:
+        account.status = "disabled"
+        account.last_error = f"账号已归档：已有 {resource_count or 0} 条资源、{task_count or 0} 个任务引用，不能物理删除"
+        await db.commit()
+        return {
+            "ok": True,
+            "archived": True,
+            "deleted": False,
+            "message": account.last_error,
+        }
+
     await db.delete(account)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "archived": False, "deleted": True}
