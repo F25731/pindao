@@ -4,9 +4,17 @@
       <n-select v-model:value="statusFilter" :options="statusOptions" placeholder="按状态筛选" clearable style="width: 180px;" @update:value="loadData" />
       <n-input v-model:value="search" placeholder="搜名称/标签/源链接/新链接/错误" clearable style="width: 300px;" @clear="loadData" @keyup.enter="loadData" />
       <n-button @click="loadData">搜索</n-button>
+      <n-button type="error" :disabled="!selectedIds.length" @click="deleteSelected">批量彻底删除</n-button>
     </n-space>
 
-    <n-data-table :columns="columns" :data="resources" :loading="loading" :pagination="false" :row-key="(r: any) => r.id" />
+    <n-data-table
+      :columns="columns"
+      :data="resources"
+      :loading="loading"
+      :pagination="false"
+      :row-key="(r: any) => r.id"
+      @update:checked-row-keys="(keys: any) => selectedIds = keys"
+    />
 
     <n-space justify="center" style="margin-top: 16px;">
       <n-pagination v-model:page="page" :page-count="pageCount" @update:page="loadData" />
@@ -27,6 +35,7 @@ const total = ref(0)
 const pageSize = 50
 const statusFilter = ref<string | null>(null)
 const search = ref('')
+const selectedIds = ref<number[]>([])
 
 const pageCount = computed(() => Math.ceil(total.value / pageSize))
 
@@ -59,6 +68,7 @@ const statusColorMap: Record<string, string> = {
 }
 
 const columns = [
+  { type: 'selection' as const },
   { title: 'ID', key: 'id', width: 60 },
   { title: '名称', key: 'name', ellipsis: { tooltip: true }, width: 200 },
   { title: '标签', key: 'tags', width: 120, ellipsis: { tooltip: true } },
@@ -71,6 +81,10 @@ const columns = [
   { title: '错误', key: 'error_message', width: 150, ellipsis: { tooltip: true } },
   { title: '重试', key: 'retry_count', width: 50 },
   { title: '创建时间', key: 'created_at', width: 160, render: (row: any) => row.created_at?.slice(0, 19).replace('T', ' ') },
+  {
+    title: '操作', key: 'actions', width: 100,
+    render: (row: any) => h(NButton, { size: 'small', type: 'error', ghost: true, onClick: () => deleteOne(row.id) }, () => '彻底删除')
+  },
 ]
 
 async function loadData() {
@@ -82,8 +96,33 @@ async function loadData() {
     const res = await api.get('/api/resources', { params })
     resources.value = res.data.items
     total.value = res.data.total
+    selectedIds.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function deleteOne(id: number) {
+  if (!window.confirm(`确定从数据库彻底删除资源 #${id}？关联任务、推送记录、重复审核也会删除。`)) return
+  try {
+    const res = await api.delete(`/api/resources/${id}`)
+    message.success(`已删除资源 ${res.data.deleted_resources || 0} 条`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '删除失败')
+  }
+}
+
+async function deleteSelected() {
+  if (!selectedIds.value.length) return
+  if (!window.confirm(`确定彻底删除选中的 ${selectedIds.value.length} 条资源？关联任务、推送记录、重复审核也会删除。`)) return
+  try {
+    const res = await api.post('/api/resources/batch-delete', { resource_ids: selectedIds.value })
+    message.success(`已删除资源 ${res.data.deleted_resources || 0} 条，任务 ${res.data.deleted_tasks || 0} 个`)
+    selectedIds.value = []
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '批量删除失败')
   }
 }
 

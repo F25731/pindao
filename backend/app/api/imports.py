@@ -11,6 +11,7 @@ from secrets import token_hex
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, ImportBatch, Resource
+from app.services.delete_service import delete_batches_permanently
 from app.services.import_service import process_import
 
 router = APIRouter()
@@ -35,6 +36,10 @@ class BatchOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BatchIdsRequest(BaseModel):
+    batch_ids: List[int]
 
 
 @router.post("/upload")
@@ -93,3 +98,25 @@ async def get_batch(
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
     return batch
+
+
+@router.delete("/batches/{batch_id}")
+async def delete_batch(
+    batch_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    deleted = await delete_batches_permanently(db, [batch_id])
+    await db.commit()
+    return {"ok": True, **deleted}
+
+
+@router.post("/batches/batch-delete")
+async def batch_delete_batches(
+    req: BatchIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    deleted = await delete_batches_permanently(db, req.batch_ids)
+    await db.commit()
+    return {"ok": True, **deleted}

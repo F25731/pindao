@@ -8,6 +8,7 @@ from datetime import datetime
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, Resource, Task
+from app.services.delete_service import delete_resources_permanently
 
 router = APIRouter()
 
@@ -39,6 +40,10 @@ class ResourceListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class BatchResourceIdsRequest(BaseModel):
+    resource_ids: List[int]
 
 
 @router.get("", response_model=ResourceListResponse)
@@ -168,3 +173,25 @@ async def batch_retry(
 
     await db.commit()
     return {"ok": True, "retried": count}
+
+
+@router.delete("/{resource_id}")
+async def delete_resource(
+    resource_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    deleted = await delete_resources_permanently(db, [resource_id])
+    await db.commit()
+    return {"ok": True, **deleted}
+
+
+@router.post("/batch-delete")
+async def batch_delete_resources(
+    req: BatchResourceIdsRequest,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    deleted = await delete_resources_permanently(db, req.resource_ids)
+    await db.commit()
+    return {"ok": True, **deleted}

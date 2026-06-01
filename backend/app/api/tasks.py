@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, or_, select, func
+from sqlalchemy import delete, select, func
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import AdminUser, DuplicateReview, Resource, Task, TelegramPushRecord
+from app.models import AdminUser, Resource, Task
+from app.services.delete_service import delete_resources_permanently
 
 router = APIRouter()
 
@@ -306,25 +307,16 @@ async def batch_delete_tasks(
     resource_ids = [task.resource_id for task in tasks]
 
     if req.mode == "task_and_resource" and resource_ids:
-        await db.execute(delete(TelegramPushRecord).where(TelegramPushRecord.resource_id.in_(resource_ids)))
-        await db.execute(
-            delete(DuplicateReview).where(
-                or_(
-                    DuplicateReview.new_resource_id.in_(resource_ids),
-                    DuplicateReview.existing_resource_id.in_(resource_ids),
-                )
-            )
-        )
+        deleted = await delete_resources_permanently(db, resource_ids)
+        await db.commit()
+        return {"ok": True, **deleted}
 
     if task_ids:
         await db.execute(delete(Task).where(Task.id.in_(task_ids)))
-
-    if req.mode == "task_and_resource" and resource_ids:
-        await db.execute(delete(Resource).where(Resource.id.in_(resource_ids)))
 
     await db.commit()
     return {
         "ok": True,
         "deleted_tasks": len(task_ids),
-        "deleted_resources": len(resource_ids) if req.mode == "task_and_resource" else 0,
+        "deleted_resources": 0,
     }
