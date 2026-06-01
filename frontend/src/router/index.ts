@@ -8,6 +8,14 @@ const routes = [
     component: () => import('../views/Login.vue'),
   },
   {
+    path: '/admin',
+    redirect: '/',
+  },
+  {
+    path: '/admin/:pathMatch(.*)*',
+    redirect: '/',
+  },
+  {
     path: '/',
     component: () => import('../components/Layout.vue'),
     meta: { requiresAuth: true },
