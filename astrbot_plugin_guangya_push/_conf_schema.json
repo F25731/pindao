@@ -9,8 +9,32 @@
     "type": "string",
     "default": ""
   },
+  "send_mode": {
+    "description": "推送方式。telegram_api 适合频道；astrbot 使用 AstrBot 会话主动发送",
+    "type": "string",
+    "default": "telegram_api",
+    "options": [
+      "telegram_api",
+      "astrbot"
+    ]
+  },
+  "telegram_bot_token": {
+    "description": "Telegram Bot Token，仅 send_mode=telegram_api 时需要",
+    "type": "string",
+    "default": ""
+  },
+  "telegram_chat_id": {
+    "description": "Telegram 频道/群 ID，可填 @频道用户名 或 -100 开头数字，仅 send_mode=telegram_api 时需要",
+    "type": "string",
+    "default": ""
+  },
+  "telegram_parse_mode": {
+    "description": "Telegram parse_mode，纯文本建议留空",
+    "type": "string",
+    "default": ""
+  },
   "target_unified_msg_origin": {
-    "description": "推送目标会话。可手动填写，也可以在目标群/频道内发送 /gy_bind_push 自动写入",
+    "description": "AstrBot 会话推送目标，仅 send_mode=astrbot 时使用",
     "type": "string",
     "default": ""
   },

@@ -4,6 +4,8 @@
       <n-button :loading="loading" @click="loadData">刷新</n-button>
       <n-button type="warning" :loading="loading" @click="recoverStuck">恢复卡住的推送</n-button>
       <n-button type="primary" :loading="loading" @click="requeueFailed">失败重新入队</n-button>
+      <n-button :loading="loading" @click="requeueSentTest">已推送抽 3 条测试</n-button>
+      <n-button type="error" ghost :loading="loading" @click="requeueAllSent">全部已推送重新入队</n-button>
     </n-space>
 
     <n-grid :cols="4" :x-gap="16" style="margin-bottom: 16px;">
@@ -64,11 +66,32 @@ async function recoverStuck() {
 
 async function requeueFailed() {
   try {
-    const res = await api.post('/api/telegram/requeue-failed')
+    const res = await api.post('/api/telegram/requeue', { statuses: ['推送失败待重试', '推送最终失败'] })
     message.success(`已重新入队 ${res.data.queued || 0} 条`)
     loadData()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '重新入队失败')
+  }
+}
+
+async function requeueSentTest() {
+  try {
+    const res = await api.post('/api/telegram/requeue', { statuses: ['已推送'], limit: 3 })
+    message.success(`已重新入队 ${res.data.queued || 0} 条，可用 /gy_push_once 测试`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '测试入队失败')
+  }
+}
+
+async function requeueAllSent() {
+  if (!window.confirm('会把所有已推送资源改回待推送，用于换频道后全量补推。确定继续？')) return
+  try {
+    const res = await api.post('/api/telegram/requeue', { statuses: ['已推送'] })
+    message.success(`已重新入队 ${res.data.queued || 0} 条`)
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '全量入队失败')
   }
 }
 

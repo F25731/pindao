@@ -198,7 +198,7 @@ class GuangyaClient:
                 "validateDuration": validate_duration,
                 "shareType": 1,
                 "code": code,
-                "autoFillCode": True,
+                "autoFillCode": False,
                 "trafficLimit": "0",
                 "maxRestoreCount": 0,
                 "downloadType": 1,

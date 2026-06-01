@@ -231,11 +231,16 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 return
 
             new_share_id = _extract_new_share_id(share_resp)
-            if not new_share_id:
+            actual_code = _extract_share_code(share_resp) or new_code
+            if not new_share_id or actual_code != new_code:
                 # 尝试从分享列表获取
                 try:
                     list_resp = await client.get_share_list(page=0)
-                    new_share_id = _find_share_id_from_list(list_resp, resource.name)
+                    share_info = _find_share_info_from_list(list_resp, resource.name, new_share_id)
+                    if share_info:
+                        new_share_id = share_info.get("share_id") or new_share_id
+                        actual_code = share_info.get("code") or actual_code
+                    checkpoint["share_list_resp"] = list_resp
                 except Exception:
                     pass
 
@@ -252,9 +257,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
                 return
 
-            new_link = build_share_link(new_share_id, new_code)
+            new_link = build_share_link(new_share_id, actual_code)
             checkpoint["new_share_id"] = new_share_id
-            checkpoint["new_extract_code"] = new_code
+            checkpoint["new_extract_code"] = actual_code
             checkpoint["new_share_link"] = new_link
             task.checkpoint = checkpoint
             await db.commit()
@@ -408,21 +413,51 @@ def _extract_new_share_id(resp: dict) -> Optional[str]:
     return None
 
 
-def _find_share_id_from_list(resp: dict, title: str) -> Optional[str]:
-    if isinstance(resp, dict):
-        data = resp.get("data", resp)
-        shares = data.get("list") or data.get("shares") or []
-        for s in shares:
-            if title and s.get("title") and s.get("title") != title:
-                continue
-            sid = _extract_new_share_id(s)
-            if sid:
-                return sid
-        for s in shares:
-            sid = _extract_new_share_id(s)
-            if sid:
-                return sid
+def _extract_share_code(resp: dict) -> Optional[str]:
+    candidates = _collect_values(
+        resp,
+        ("code", "extractCode", "extract_code", "shareCode", "share_code", "pwd", "password"),
+    )
+    for val in candidates:
+        code = _normalize_share_code(val)
+        if code:
+            return code
     return None
+
+
+def _extract_share_info(item: dict) -> dict:
+    return {
+        "share_id": _extract_new_share_id(item),
+        "code": _extract_share_code(item),
+        "title": item.get("title") or item.get("name") or item.get("fileName"),
+    }
+
+
+def _find_share_info_from_list(resp: dict, title: str, share_id: Optional[str] = None) -> Optional[dict]:
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data", resp)
+    shares = data.get("list") or data.get("shares") or []
+    for item in shares:
+        info = _extract_share_info(item)
+        if share_id and info["share_id"] == share_id:
+            return info
+    for item in shares:
+        info = _extract_share_info(item)
+        if title and info["title"] and info["title"] != title:
+            continue
+        if info["share_id"]:
+            return info
+    for item in shares:
+        info = _extract_share_info(item)
+        if info["share_id"]:
+            return info
+    return None
+
+
+def _find_share_id_from_list(resp: dict, title: str) -> Optional[str]:
+    info = _find_share_info_from_list(resp, title)
+    return info.get("share_id") if info else None
 
 
 def _find_file_ids_from_list(resp: dict, title: str) -> list:
@@ -478,6 +513,18 @@ def _normalize_share_id(value) -> Optional[str]:
     if match:
         return match.group(1)
     return text
+
+
+def _normalize_share_code(value) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"[?&]code=([^&#]+)", text)
+    if match:
+        return match.group(1)
+    if len(text) <= 16 and re.match(r"^[A-Za-z0-9_-]+$", text):
+        return text
+    return None
 
 
 def _has_api_error(resp: dict) -> bool:

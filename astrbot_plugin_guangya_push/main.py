@@ -91,6 +91,19 @@ class Main(Star):
     def _target_origin(self) -> str:
         return str(self._config_value("target_unified_msg_origin", "")).strip()
 
+    def _send_mode(self) -> str:
+        mode = str(self._config_value("send_mode", "telegram_api")).strip()
+        return mode if mode in ("telegram_api", "astrbot") else "telegram_api"
+
+    def _telegram_bot_token(self) -> str:
+        return str(self._config_value("telegram_bot_token", "")).strip()
+
+    def _telegram_chat_id(self) -> str:
+        return str(self._config_value("telegram_chat_id", "")).strip()
+
+    def _telegram_parse_mode(self) -> str:
+        return str(self._config_value("telegram_parse_mode", "")).strip()
+
     def _batch_size(self) -> int:
         return max(1, min(int(self._config_value("batch_size", 5)), 100))
 
@@ -118,7 +131,7 @@ class Main(Star):
         await asyncio.sleep(3)
         while True:
             try:
-                if self._is_enabled() and self._target_origin():
+                if self._is_enabled() and self._can_send():
                     await self._push_once()
             except asyncio.CancelledError:
                 raise
@@ -126,12 +139,47 @@ class Main(Star):
                 logger.error(f"光鸭资源自动推送失败: {exc}")
             await asyncio.sleep(self._poll_interval())
 
+    def _can_send(self) -> bool:
+        if self._send_mode() == "telegram_api":
+            return bool(self._telegram_bot_token() and self._telegram_chat_id())
+        return bool(self._target_origin())
+
     async def _send_text(self, text: str) -> Any:
+        if self._send_mode() == "telegram_api":
+            return await self._send_telegram_text(text)
+
         target = self._target_origin()
         if not target:
             raise RuntimeError("未绑定推送目标，请在目标会话发送 /gy_bind_push")
         chain = MessageChain().message(text)
         return await self.context.send_message(target, chain)
+
+    async def _send_telegram_text(self, text: str) -> dict[str, Any]:
+        token = self._telegram_bot_token()
+        chat_id = self._telegram_chat_id()
+        if not token:
+            raise RuntimeError("未配置 telegram_bot_token")
+        if not chat_id:
+            raise RuntimeError("未配置 telegram_chat_id")
+
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": False,
+        }
+        parse_mode = self._telegram_parse_mode()
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"raw": resp.text}
+            if resp.status_code >= 400 or data.get("ok") is False:
+                raise RuntimeError(f"Telegram 发送失败: HTTP {resp.status_code}, {data}")
+            return data
 
     async def _callback_with_retry(
         self,
@@ -207,6 +255,11 @@ class Main(Star):
             if value:
                 return str(value)
         if isinstance(send_result, dict):
+            result = send_result.get("result")
+            if isinstance(result, dict):
+                value = result.get("message_id") or result.get("id")
+                if value:
+                    return str(value)
             value = send_result.get("message_id") or send_result.get("id")
             if value:
                 return str(value)
@@ -227,11 +280,15 @@ class Main(Star):
         try:
             client = self._client()
             health = await client.health()
-            target = self._target_origin() or "未绑定"
+            if self._send_mode() == "telegram_api":
+                target = self._telegram_chat_id() or "未配置 telegram_chat_id"
+            else:
+                target = self._target_origin() or "未绑定"
             enabled = "开启" if self._is_enabled() else "暂停"
             yield event.plain_result(
                 f"光鸭推送接口正常\n"
                 f"Key: {health.get('key_name', '-')}\n"
+                f"模式: {self._send_mode()}\n"
                 f"目标: {target}\n"
                 f"自动轮询: {enabled}"
             )

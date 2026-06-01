@@ -29,6 +29,11 @@ class PushResourceRequest(BaseModel):
     resource_ids: List[int]
 
 
+class RequeueRequest(BaseModel):
+    statuses: Optional[List[str]] = None
+    limit: Optional[int] = None
+
+
 @router.get("/pending")
 async def list_pending_push(
     page: int = 0,
@@ -89,20 +94,48 @@ async def manual_push(
     return {"ok": True, "queued": count}
 
 
-@router.post("/requeue-failed")
-async def requeue_failed_push(
+@router.post("/requeue")
+async def requeue_push(
+    req: RequeueRequest,
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
+    statuses = req.statuses or ["推送失败待重试", "推送最终失败"]
+    allowed_statuses = {"已推送", "推送失败待重试", "推送最终失败", "推送中", "待推送"}
+    invalid = [status for status in statuses if status not in allowed_statuses]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"不支持的状态: {invalid}")
+
+    query = (
+        select(Resource)
+        .where(Resource.status.in_(statuses))
+        .order_by(Resource.pushed_at.desc().nullslast(), Resource.id.desc())
+    )
+    if req.limit:
+        query = query.limit(max(1, min(req.limit, 10000)))
     result = await db.execute(
-        select(Resource).where(Resource.status.in_(("推送失败待重试", "推送最终失败")))
+        query
     )
     resources = result.scalars().all()
     for resource in resources:
         resource.status = "待推送"
         resource.error_message = None
+        if "已推送" in statuses:
+            resource.pushed_at = None
     await db.commit()
     return {"ok": True, "queued": len(resources)}
+
+
+@router.post("/requeue-failed")
+async def requeue_failed_push(
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    return await requeue_push(
+        RequeueRequest(statuses=["推送失败待重试", "推送最终失败"]),
+        db,
+        user,
+    )
 
 
 @router.post("/recover-stuck")
