@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session, engine
 from app.config import settings
 from app.models import Base, Task, Resource, GuangyaAccount
+from app.services.import_service import process_next_import_batch
 from app.services.schema_service import ensure_runtime_indexes, ensure_runtime_schema
 from app.worker.transfer_handler import execute_transfer
 
@@ -135,6 +136,12 @@ async def worker_loop():
     while True:
         try:
             async with async_session() as db:
+                imported = await process_next_import_batch(db, limit=500)
+                if imported:
+                    logger.info(f"导入管道处理 {imported} 行")
+                    await asyncio.sleep(1)
+                    continue
+
                 running = await get_running_count(db)
                 if running >= settings.worker_max_concurrent:
                     await asyncio.sleep(settings.worker_poll_interval)

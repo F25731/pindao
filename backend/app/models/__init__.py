@@ -1,7 +1,7 @@
 from .base import Base, TimestampMixin
 from .user import AdminUser
 from .account import GuangyaAccount
-from .import_batch import ImportBatch
+from .import_batch import ImportBatch, RawImportRow
 from .resource import Resource
 from .task import Task
 from .duplicate_review import DuplicateReview
@@ -13,6 +13,7 @@ __all__ = [
     "AdminUser",
     "GuangyaAccount",
     "ImportBatch",
+    "RawImportRow",
     "Resource",
     "Task",
     "DuplicateReview",

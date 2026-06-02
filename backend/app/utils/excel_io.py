@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple, Generator, Sequence
+from typing import Any, Dict, List, Tuple, Generator, Sequence
 from openpyxl import Workbook, load_workbook
 import csv
 
@@ -63,6 +63,55 @@ def read_file_stream(file_path: str, batch_size: int = 2000) -> Generator[List[T
         yield from read_csv_stream(file_path, batch_size)
     else:
         yield from read_excel_stream(file_path, batch_size)
+
+
+def _raw_payload(row: Sequence[Any], row_number: int) -> Dict[str, Any]:
+    values = ["" if value is None else str(value).strip() for value in row]
+    return {
+        "row_number": row_number,
+        "columns": values,
+        "name": values[0] if len(values) > 0 else "",
+        "tags": values[1] if len(values) > 1 else "",
+        "link": values[2] if len(values) > 2 else "",
+    }
+
+
+def read_csv_raw_stream(file_path: str, batch_size: int = 2000) -> Generator[List[Dict[str, Any]], None, None]:
+    batch = []
+    with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+        for row_number, row in enumerate(reader, start=2):
+            batch.append(_raw_payload(row, row_number))
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+    if batch:
+        yield batch
+
+
+def read_excel_raw_stream(file_path: str, batch_size: int = 2000) -> Generator[List[Dict[str, Any]], None, None]:
+    wb = load_workbook(file_path, read_only=True)
+    ws = wb.active
+    batch = []
+    for row_number, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if row_number == 1:
+            continue
+        batch.append(_raw_payload(row or [], row_number))
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+    wb.close()
+
+
+def read_file_raw_stream(file_path: str, batch_size: int = 2000) -> Generator[List[Dict[str, Any]], None, None]:
+    ext = Path(file_path).suffix.lower()
+    if ext == ".csv":
+        yield from read_csv_raw_stream(file_path, batch_size)
+    else:
+        yield from read_excel_raw_stream(file_path, batch_size)
 
 
 def write_excel(

@@ -1,10 +1,11 @@
 from typing import Iterable
+import os
 
 from fastapi import HTTPException
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DuplicateReview, ImportBatch, Resource, Task, TelegramPushRecord
+from app.models import DuplicateReview, ImportBatch, RawImportRow, Resource, Task, TelegramPushRecord
 
 RUNNING_TASK_STATUSES = {"running", "pause_requested", "cancel_requested"}
 
@@ -45,6 +46,11 @@ async def delete_resources_permanently(
         )
         .execution_options(synchronize_session=False)
     )
+    raw_result = await db.execute(
+        delete(RawImportRow)
+        .where(RawImportRow.resource_id.in_(ids))
+        .execution_options(synchronize_session=False)
+    )
     task_result = await db.execute(
         delete(Task)
         .where(Task.resource_id.in_(ids))
@@ -61,6 +67,7 @@ async def delete_resources_permanently(
         "deleted_tasks": task_result.rowcount or len(task_ids),
         "deleted_push_records": push_result.rowcount or 0,
         "deleted_duplicate_reviews": duplicate_result.rowcount or 0,
+        "deleted_raw_rows": raw_result.rowcount or 0,
     }
 
 
@@ -74,7 +81,15 @@ async def delete_batches_permanently(
 
     resource_result = await db.execute(select(Resource.id).where(Resource.batch_id.in_(ids)))
     resource_ids = [row[0] for row in resource_result.all()]
+    path_result = await db.execute(select(ImportBatch.stored_path).where(ImportBatch.id.in_(ids)))
+    stored_paths = [row[0] for row in path_result.all() if row[0]]
     deleted = await delete_resources_permanently(db, resource_ids)
+
+    raw_batch_result = await db.execute(
+        delete(RawImportRow)
+        .where(RawImportRow.batch_id.in_(ids))
+        .execution_options(synchronize_session=False)
+    )
 
     batch_result = await db.execute(
         delete(ImportBatch)
@@ -82,4 +97,10 @@ async def delete_batches_permanently(
         .execution_options(synchronize_session=False)
     )
     deleted["deleted_batches"] = batch_result.rowcount or 0
+    deleted["deleted_raw_rows"] = deleted.get("deleted_raw_rows", 0) + (raw_batch_result.rowcount or 0)
+    for path in stored_paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     return deleted

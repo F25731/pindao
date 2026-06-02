@@ -28,12 +28,8 @@
     <n-card v-if="importResult" title="导入结果" style="margin-top: 16px;">
       <n-descriptions bordered :column="2">
         <n-descriptions-item label="批次 ID">{{ importResult.batch_id }}</n-descriptions-item>
-        <n-descriptions-item label="总行数">{{ importResult.total_rows }}</n-descriptions-item>
-        <n-descriptions-item label="有效行数">{{ importResult.valid_rows }}</n-descriptions-item>
-        <n-descriptions-item label="新增资源">{{ importResult.new_count }}</n-descriptions-item>
-        <n-descriptions-item label="精确重复跳过">{{ importResult.duplicate_skipped }}</n-descriptions-item>
-        <n-descriptions-item label="疑似重复">{{ importResult.fuzzy_flagged }}</n-descriptions-item>
-        <n-descriptions-item label="解析失败">{{ importResult.parse_failed }}</n-descriptions-item>
+        <n-descriptions-item label="状态">{{ importResult.status }}</n-descriptions-item>
+        <n-descriptions-item label="提示">{{ importResult.message }}</n-descriptions-item>
       </n-descriptions>
     </n-card>
   </div>
@@ -54,7 +50,7 @@ function handleUploadFinish({ event }: any) {
   try {
     const res = JSON.parse(event.target.response)
     importResult.value = res
-    message.success(`导入完成：新增 ${res.new_count} 条资源`)
+    message.success(`已加入后台导入队列：批次 #${res.batch_id}`)
   } catch {
     message.error('解析导入结果失败')
   }

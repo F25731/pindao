@@ -30,13 +30,15 @@ const columns = [
   { title: 'ID', key: 'id', width: 60 },
   { title: '文件名', key: 'filename', ellipsis: { tooltip: true } },
   { title: '总行数', key: 'total_rows', width: 80 },
+  { title: '已处理', key: 'processed_rows', width: 80 },
+  { title: '进度', key: 'progress', width: 90, render: (row: any) => progressText(row) },
   { title: '新增', key: 'new_count', width: 70 },
   { title: '重复跳过', key: 'duplicate_skipped', width: 90 },
   { title: '疑似重复', key: 'fuzzy_flagged', width: 90 },
   { title: '解析失败', key: 'parse_failed', width: 90 },
   {
     title: '状态', key: 'status', width: 100,
-    render: (row: any) => h(NTag, { type: row.status === 'completed' ? 'success' : 'warning', size: 'small' }, () => row.status)
+    render: (row: any) => h(NTag, { type: statusType(row.status), size: 'small' }, () => row.status)
   },
   { title: '创建时间', key: 'created_at', width: 170, render: (row: any) => row.created_at?.slice(0, 19).replace('T', ' ') },
   {
@@ -44,6 +46,19 @@ const columns = [
     render: (row: any) => h(NButton, { size: 'small', type: 'error', ghost: true, onClick: () => deleteOne(row.id) }, () => '彻底删除')
   },
 ]
+
+function progressText(row: any) {
+  if (!row.total_rows) return row.status === 'queued_raw' || row.status === 'raw_loading' ? '读取中' : '-'
+  const percent = Math.min(100, Math.round((Number(row.processed_rows || 0) / Number(row.total_rows)) * 100))
+  return `${percent}%`
+}
+
+function statusType(status: string) {
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'error'
+  if (status === 'processing' || status === 'raw_loading') return 'info'
+  return 'warning'
+}
 
 async function loadData() {
   loading.value = true

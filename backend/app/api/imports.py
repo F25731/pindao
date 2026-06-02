@@ -12,18 +12,21 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, ImportBatch, Resource
 from app.services.delete_service import delete_batches_permanently
-from app.services.import_service import process_import
+from app.services.import_service import enqueue_import
 
 router = APIRouter()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+IMPORT_DIR = os.path.join(UPLOAD_DIR, "imports")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(IMPORT_DIR, exist_ok=True)
 
 
 class BatchOut(BaseModel):
     id: int
     filename: str
     total_rows: int
+    processed_rows: int
     valid_rows: int
     new_count: int
     duplicate_skipped: int
@@ -52,21 +55,20 @@ async def upload_excel(
         raise HTTPException(status_code=400, detail="仅支持 .xlsx、.xls 或 .csv 文件")
 
     safe_name = f"{token_hex(8)}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
+    file_path = os.path.join(IMPORT_DIR, safe_name)
 
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
     try:
-        result = await process_import(db, file_path, file.filename, user.id)
+        result = await enqueue_import(db, file_path, file.filename, user.id)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
-    finally:
         try:
             os.remove(file_path)
         except FileNotFoundError:
             pass
+        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
 
 
 @router.get("/batches", response_model=List[BatchOut])
