@@ -14,6 +14,7 @@ from app.config import settings
 from app.models import Base, Task, Resource, GuangyaAccount
 from app.services.import_service import process_next_import_batch
 from app.services.schema_service import ensure_runtime_database
+from app.services.system_control import is_worker_paused
 from app.worker.transfer_handler import execute_transfer
 
 logging.basicConfig(
@@ -136,6 +137,10 @@ async def worker_loop():
     while True:
         try:
             async with async_session() as db:
+                if await is_worker_paused(db):
+                    await asyncio.sleep(settings.worker_poll_interval)
+                    continue
+
                 imported = await process_next_import_batch(db, limit=500)
                 if imported:
                     logger.info(f"导入管道处理 {imported} 行")

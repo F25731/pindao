@@ -184,6 +184,9 @@ async def ensure_runtime_schema(conn):
         "UPDATE guangya_accounts SET processed_count = 0 WHERE processed_count IS NULL",
         "UPDATE guangya_accounts SET created_at = now() WHERE created_at IS NULL",
         "UPDATE guangya_accounts SET updated_at = now() WHERE updated_at IS NULL",
+        # runtime controls.
+        "CREATE TABLE IF NOT EXISTS system_controls (key varchar(64) PRIMARY KEY, value jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz DEFAULT now())",
+        "INSERT INTO system_controls (key, value) VALUES ('worker_control', '{\"paused\": false}'::jsonb) ON CONFLICT (key) DO NOTHING",
     ]
     for statement in statements:
         await conn.execute(text(statement))

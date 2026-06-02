@@ -17,6 +17,15 @@
       <n-layout-header bordered style="height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px;">
         <span style="font-size: 16px; font-weight: 500;">{{ pageTitle }}</span>
         <n-space align="center">
+          <n-tag v-if="systemControl.worker_paused" type="error" size="small">全局已暂停</n-tag>
+          <n-button
+            size="small"
+            :type="systemControl.worker_paused ? 'primary' : 'warning'"
+            :loading="systemActionLoading"
+            @click="toggleSystemPause"
+          >
+            {{ systemControl.worker_paused ? '恢复系统' : '全局暂停' }}
+          </n-button>
           <span>{{ authStore.username }}</span>
           <n-button size="small" @click="handleLogout">退出</n-button>
         </n-space>
@@ -29,18 +38,28 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NLayout, NLayoutSider, NLayoutHeader, NLayoutContent,
-  NMenu, NButton, NSpace
+  NMenu, NButton, NSpace, NTag, useMessage
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
+import { api } from '../api/client'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const message = useMessage()
+const systemActionLoading = ref(false)
+const systemControl = ref({
+  worker_paused: false,
+  reason: '',
+  running_tasks: 0,
+  pending_tasks: 0,
+  paused_tasks: 0,
+})
 
 const currentRoute = computed(() => route.name as string)
 
@@ -83,6 +102,35 @@ function handleLogout() {
   authStore.logout()
   router.push('/login')
 }
+
+async function loadSystemControl() {
+  try {
+    const res = await api.get('/api/system/control')
+    systemControl.value = res.data
+  } catch (e) {
+    console.error('加载系统控制状态失败', e)
+  }
+}
+
+async function toggleSystemPause() {
+  systemActionLoading.value = true
+  try {
+    if (systemControl.value.worker_paused) {
+      await api.post('/api/system/resume')
+      message.success('系统已恢复，worker 会继续处理导入和转存')
+    } else {
+      const res = await api.post('/api/system/pause', { reason: '后台全局暂停' })
+      message.success(`已全局暂停：暂停 ${res.data.paused || 0} 个任务，等待停止 ${res.data.pause_requested || 0} 个`)
+    }
+    await loadSystemControl()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '系统控制失败')
+  } finally {
+    systemActionLoading.value = false
+  }
+}
+
+onMounted(loadSystemControl)
 </script>
 
 <style scoped>

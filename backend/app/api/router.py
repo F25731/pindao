@@ -12,6 +12,7 @@ from app.api.export import router as export_router
 from app.api.stats import router as stats_router
 from app.api.external import router as external_router
 from app.api.guangya_login import router as guangya_login_router
+from app.api.system import router as system_router
 
 api_router = APIRouter()
 
@@ -27,3 +28,4 @@ api_router.include_router(api_keys_router, prefix="/api-keys", tags=["API密钥"
 api_router.include_router(export_router, prefix="/export", tags=["导出"])
 api_router.include_router(stats_router, prefix="/stats", tags=["统计"])
 api_router.include_router(external_router, prefix="/external", tags=["外部API"])
+api_router.include_router(system_router, prefix="/system", tags=["系统控制"])
