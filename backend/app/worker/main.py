@@ -85,7 +85,7 @@ async def process_task(task_id: int):
         task = result.scalar_one_or_none()
         if not task:
             return
-        if task.status not in ("pending", "failed_retryable"):
+        if task.status not in ("pending", "failed_retryable", "running"):
             return
 
         res_result = await db.execute(
@@ -99,15 +99,15 @@ async def process_task(task_id: int):
             return
 
         await db.refresh(task)
-        if task.status not in ("pending", "failed_retryable"):
+        if task.status not in ("pending", "failed_retryable", "running"):
             return
 
-        # 标记为运行中
-        task.status = "running"
-        task.started_at = datetime.now(timezone.utc)
-        task.attempt += 1
-        resource.status = "转存中"
-        await db.commit()
+        if task.status != "running":
+            task.status = "running"
+            task.started_at = datetime.now(timezone.utc)
+            task.attempt += 1
+            resource.status = "转存中"
+            await db.commit()
 
         try:
             await execute_transfer(db, task, resource)
@@ -141,20 +141,38 @@ async def worker_loop():
                     logger.info(f"导入管道处理 {imported} 行")
 
                 running = await get_running_count(db)
-                if running >= settings.worker_max_concurrent:
+                available_slots = max(settings.worker_max_concurrent - running, 0)
+                if available_slots <= 0:
                     await asyncio.sleep(settings.worker_poll_interval)
                     continue
 
-                task = await pick_next_task(db)
-                if not task:
+                task_ids = []
+                for _ in range(available_slots):
+                    task = await pick_next_task(db)
+                    if not task:
+                        break
+                    task.status = "running"
+                    task.started_at = datetime.now(timezone.utc)
+                    task.attempt += 1
+                    res_result = await db.execute(
+                        select(Resource).where(Resource.id == task.resource_id)
+                    )
+                    resource = res_result.scalar_one_or_none()
+                    if resource:
+                        resource.status = "转存中"
+                    task_ids.append(task.id)
+                    await db.flush()
+
+                if not task_ids:
                     await asyncio.sleep(settings.worker_poll_interval)
                     continue
 
-                task_id = task.id
-                logger.info(f"开始处理任务: task_id={task_id}")
+                await db.commit()
+                logger.info(f"开始处理任务: task_ids={task_ids}")
 
             # 在后台执行，允许主循环继续拾取下一个任务
-            asyncio.create_task(process_task(task_id))
+            for task_id in task_ids:
+                asyncio.create_task(process_task(task_id))
             await asyncio.sleep(2)
 
         except Exception as e:

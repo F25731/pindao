@@ -167,6 +167,15 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
         # STEP 4: 转存到自己账号
         if "restore_done" not in checkpoint:
+            if "target_existing_file_ids" not in checkpoint:
+                try:
+                    before_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
+                    checkpoint["target_existing_file_ids"] = _extract_file_ids_from_file_list(before_resp)
+                    task.checkpoint = checkpoint
+                    await db.commit()
+                except Exception:
+                    checkpoint["target_existing_file_ids"] = []
+
             try:
                 restore_resp = await client.restore_share(
                     access_token=checkpoint["share_access_token"],
@@ -185,14 +194,26 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
             checkpoint["restore_done"] = True
             checkpoint["restore_resp"] = restore_resp
-            transferred_file_ids = _extract_restored_file_ids(restore_resp)
-            if not transferred_file_ids:
-                try:
-                    file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
+            restored_response_file_ids = _extract_restored_file_ids(restore_resp)
+            transferred_file_ids = (
+                restored_response_file_ids
+                if _looks_like_target_file_ids(restored_response_file_ids, checkpoint.get("file_ids") or [])
+                else []
+            )
+            try:
+                file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
+                new_file_ids = _find_new_file_ids_from_list(
+                    file_list_resp,
+                    checkpoint.get("target_existing_file_ids") or [],
+                    resource.name,
+                )
+                if new_file_ids:
+                    transferred_file_ids = new_file_ids
+                elif not transferred_file_ids:
                     transferred_file_ids = _find_file_ids_from_list(file_list_resp, resource.name)
-                    checkpoint["file_list_resp"] = file_list_resp
-                except Exception:
-                    pass
+                checkpoint["file_list_resp"] = file_list_resp
+            except Exception:
+                pass
             if transferred_file_ids:
                 checkpoint["transferred_file_ids"] = transferred_file_ids
             task.checkpoint = checkpoint
@@ -402,6 +423,13 @@ def _extract_restored_file_ids(resp: dict) -> list:
     return _dedupe_ids(ids)
 
 
+def _looks_like_target_file_ids(restored_ids: list, source_ids: list) -> bool:
+    if not restored_ids:
+        return False
+    source_count = max(len(source_ids), 1)
+    return len(restored_ids) <= source_count
+
+
 def _extract_new_share_id(resp: dict) -> Optional[str]:
     candidates = _collect_values(
         resp,
@@ -465,25 +493,60 @@ def _find_share_id_from_list(resp: dict, title: str) -> Optional[str]:
     return info.get("share_id") if info else None
 
 
-def _find_file_ids_from_list(resp: dict, title: str) -> list:
+def _extract_file_items(resp: dict) -> list:
     if not isinstance(resp, dict):
         return []
     data = resp.get("data", resp)
-    files = data.get("list") or data.get("files") or data.get("fileList") or []
+    return data.get("list") or data.get("files") or data.get("fileList") or []
+
+
+def _file_item_id(item: dict) -> Optional[str]:
+    file_id = item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
+    return str(file_id) if file_id else None
+
+
+def _extract_file_ids_from_file_list(resp: dict) -> list:
+    return _dedupe_ids([_file_item_id(item) for item in _extract_file_items(resp)])
+
+
+def _find_new_file_ids_from_list(resp: dict, existing_ids: list, title: str) -> list:
+    existing = {str(file_id) for file_id in existing_ids if file_id}
+    new_items = []
+    for item in _extract_file_items(resp):
+        file_id = _file_item_id(item)
+        if file_id and file_id not in existing:
+            new_items.append(item)
+
+    if not new_items:
+        return []
+
     matched = []
-    for item in files:
+    for item in new_items:
         if title and item.get("name") and item.get("name") != title:
             continue
-        file_id = item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
+        file_id = _file_item_id(item)
         if file_id:
             matched.append(file_id)
     if matched:
         return _dedupe_ids(matched)
-    return _dedupe_ids([
-        item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
-        for item in files
-        if item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
-    ])
+
+    return _dedupe_ids([_file_item_id(item) for item in new_items])
+
+
+def _find_file_ids_from_list(resp: dict, title: str) -> list:
+    files = _extract_file_items(resp)
+    matched = []
+    for item in files:
+        if title and item.get("name") and item.get("name") != title:
+            continue
+        file_id = _file_item_id(item)
+        if file_id:
+            matched.append(file_id)
+    if matched:
+        return _dedupe_ids(matched)
+    if len(files) == 1:
+        return _dedupe_ids([_file_item_id(files[0])])
+    return []
 
 
 def _collect_values(value, keys: tuple[str, ...]) -> list:
@@ -503,6 +566,8 @@ def _dedupe_ids(values: list) -> list:
     ids = []
     seen = set()
     for val in values:
+        if val is None:
+            continue
         text = str(val)
         if text and text not in seen:
             seen.add(text)
