@@ -53,6 +53,8 @@ const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
 
 const statusOptions = [
   { label: '待推送', value: '待推送' },
+  { label: '推送队列', value: '推送队列' },
+  { label: '推送中', value: '推送中' },
   { label: '已推送', value: '已推送' },
   { label: '转存成功', value: '转存成功' },
   { label: '待转存', value: '待转存' },

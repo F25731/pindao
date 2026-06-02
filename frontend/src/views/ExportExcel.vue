@@ -40,6 +40,8 @@ const exportResult = ref<any>(null)
 const statusOptions = [
   { label: '转存成功', value: '转存成功' },
   { label: '待推送', value: '待推送' },
+  { label: '推送队列', value: '推送队列' },
+  { label: '推送中', value: '推送中' },
   { label: '已推送', value: '已推送' },
   { label: '待转存', value: '待转存' },
   { label: '最终失败', value: '最终失败' },

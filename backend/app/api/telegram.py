@@ -78,20 +78,43 @@ async def manual_push(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
-    """手动将指定资源标记为待推送。"""
+    """手动将指定资源放入真正的推送队列，供 AstrBot 领取。"""
     result = await db.execute(
         select(Resource).where(
             Resource.id.in_(req.resource_ids),
-            Resource.status.in_(("转存成功", "待推送", "推送中", "推送失败待重试", "推送最终失败")),
+            Resource.status.in_(("转存成功", "待推送", "推送队列", "推送中", "推送失败待重试", "推送最终失败")),
         )
     )
     resources = result.scalars().all()
     count = 0
     for r in resources:
-        r.status = "待推送"
+        r.status = "推送队列"
+        r.error_message = None
         count += 1
     await db.commit()
     return {"ok": True, "queued": count}
+
+
+@router.post("/push-all")
+async def push_all_pending(
+    limit: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    query = (
+        select(Resource)
+        .where(Resource.status == "待推送")
+        .order_by(Resource.transferred_at.asc().nullslast(), Resource.id.asc())
+    )
+    if limit:
+        query = query.limit(max(1, min(limit, 10000)))
+    result = await db.execute(query)
+    resources = result.scalars().all()
+    for resource in resources:
+        resource.status = "推送队列"
+        resource.error_message = None
+    await db.commit()
+    return {"ok": True, "queued": len(resources)}
 
 
 @router.post("/requeue")
@@ -101,7 +124,7 @@ async def requeue_push(
     user: AdminUser = Depends(get_current_user),
 ):
     statuses = req.statuses or ["推送失败待重试", "推送最终失败"]
-    allowed_statuses = {"已推送", "推送失败待重试", "推送最终失败", "推送中", "待推送"}
+    allowed_statuses = {"已推送", "推送失败待重试", "推送最终失败", "推送中", "待推送", "推送队列"}
     invalid = [status for status in statuses if status not in allowed_statuses]
     if invalid:
         raise HTTPException(status_code=400, detail=f"不支持的状态: {invalid}")
@@ -118,7 +141,7 @@ async def requeue_push(
     )
     resources = result.scalars().all()
     for resource in resources:
-        resource.status = "待推送"
+        resource.status = "推送队列"
         resource.error_message = None
         if "已推送" in statuses:
             resource.pushed_at = None
@@ -165,7 +188,7 @@ async def push_stats(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
-    statuses = ["待推送", "推送中", "已推送", "推送失败待重试", "推送最终失败"]
+    statuses = ["待推送", "推送队列", "推送中", "已推送", "推送失败待重试", "推送最终失败"]
     counts = {}
     for s in statuses:
         result = await db.execute(

@@ -82,7 +82,7 @@ async def get_pending(
 ):
     result = await db.execute(
         select(Resource)
-        .where(Resource.status == "待推送")
+        .where(Resource.status == "推送队列")
         .order_by(Resource.transferred_at.asc())
         .limit(limit)
     )
@@ -91,7 +91,7 @@ async def get_pending(
     items = [build_push_item(r) for r in resources]
 
     total_result = await db.execute(
-        select(func.count(Resource.id)).where(Resource.status == "待推送")
+        select(func.count(Resource.id)).where(Resource.status == "推送队列")
     )
     total = total_result.scalar()
 
@@ -115,11 +115,11 @@ async def lease_pending(
     )
     for resource in stale_result.scalars().all():
         resource.status = "推送失败待重试"
-        resource.error_message = "推送领取后超时未回调，已自动回到可重试状态"
+        resource.error_message = "推送领取后超时未回调，已恢复到失败待重试，需在推送管理中重新入队"
 
     result = await db.execute(
         select(Resource)
-        .where(Resource.status.in_(("待推送", "推送失败待重试")))
+        .where(Resource.status == "推送队列")
         .order_by(Resource.transferred_at.asc().nullslast(), Resource.id.asc())
         .with_for_update(skip_locked=True)
         .limit(limit)
@@ -143,7 +143,7 @@ async def lease_pending(
     await db.commit()
 
     total_result = await db.execute(
-        select(func.count(Resource.id)).where(Resource.status.in_(("待推送", "推送失败待重试")))
+        select(func.count(Resource.id)).where(Resource.status == "推送队列")
     )
     return {
         "items": items,

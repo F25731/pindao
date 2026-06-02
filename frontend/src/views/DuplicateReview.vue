@@ -102,8 +102,8 @@ const columns = [
   },
 ]
 
-function handleCheck(keys: number[]) {
-  selectedIds.value = keys
+function handleCheck(keys: Array<string | number>) {
+  selectedIds.value = keys.map((key) => Number(key)).filter((key) => Number.isFinite(key))
 }
 
 async function viewDetail(id: number) {

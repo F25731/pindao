@@ -45,7 +45,7 @@ const newKey = ref('')
 const apiGuide = `# 健康检查
 curl -H "X-API-Key: 你的密钥" http://你的后端地址:8000/api/external/push/health
 
-# 领取待推送资源，系统会把资源锁定为推送中，避免重复推送
+# 领取推送队列资源，系统会把资源锁定为推送中，避免重复推送
 curl -X POST -H "X-API-Key: 你的密钥" "http://你的后端地址:8000/api/external/push/lease?limit=10"
 
 # 回调推送成功
