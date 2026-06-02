@@ -16,7 +16,7 @@
 
     <n-card v-if="exportResult" title="导出结果" style="margin-top: 16px;">
       <p>已导出 {{ exportResult.count }} 条资源</p>
-      <n-button type="primary" @click="download">下载文件</n-button>
+      <n-button type="primary" :loading="downloading" @click="download">下载文件</n-button>
     </n-card>
   </div>
 </template>
@@ -30,6 +30,7 @@ const message = useMessage()
 const batchId = ref<number | null>(null)
 const status = ref<string | null>(null)
 const exporting = ref(false)
+const downloading = ref(false)
 const exportResult = ref<any>(null)
 
 const statusOptions = [
@@ -56,9 +57,28 @@ async function doExport() {
   }
 }
 
-function download() {
+async function download() {
   if (!exportResult.value?.filename) return
-  const token = localStorage.getItem('token')
-  window.open(`/api/export/download/${exportResult.value.filename}?token=${token}`, '_blank')
+  downloading.value = true
+  try {
+    const res = await api.get(`/api/export/download/${exportResult.value.filename}`, {
+      responseType: 'blob',
+    })
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = exportResult.value.filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '下载失败')
+  } finally {
+    downloading.value = false
+  }
 }
 </script>

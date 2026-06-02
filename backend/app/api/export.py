@@ -39,12 +39,11 @@ async def export_excel(
 
     rows = []
     for r in resources:
-        link = r.new_share_link if r.new_share_link else r.original_link
-        rows.append((r.name, r.tags or "", link))
+        rows.append((r.name, r.tags or "", r.original_link, r.new_share_link or ""))
 
     filename = f"export_{token_hex(4)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     filepath = os.path.join(EXPORT_DIR, filename)
-    write_excel(filepath, rows)
+    write_excel(filepath, rows, headers=("名称", "标签", "源链接", "我的分享链接"))
 
     return {"filename": filename, "count": len(rows)}
 
@@ -54,6 +53,7 @@ async def download_file(
     filename: str,
     user: AdminUser = Depends(get_current_user),
 ):
+    filename = os.path.basename(filename)
     filepath = os.path.join(EXPORT_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="文件不存在")

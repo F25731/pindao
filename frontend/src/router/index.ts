@@ -24,6 +24,7 @@ const routes = [
       { path: 'import', name: 'ImportExcel', component: () => import('../views/ImportExcel.vue') },
       { path: 'batches', name: 'BatchList', component: () => import('../views/BatchList.vue') },
       { path: 'resources', name: 'ResourceList', component: () => import('../views/ResourceList.vue') },
+      { path: 'search', name: 'ResourceSearch', component: () => import('../views/ResourceSearch.vue') },
       { path: 'tasks', name: 'TaskQueue', component: () => import('../views/TaskQueue.vue') },
       { path: 'duplicates', name: 'DuplicateReview', component: () => import('../views/DuplicateReview.vue') },
       { path: 'failed', name: 'FailedTasks', component: () => import('../views/FailedTasks.vue') },

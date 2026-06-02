@@ -4,6 +4,13 @@
       <n-button type="primary" @click="showCreate = true">创建 API 密钥</n-button>
     </n-space>
 
+    <n-card title="API 调用说明" size="small" style="margin-bottom: 16px;">
+      <n-alert type="info" style="margin-bottom: 12px;">
+        外部程序通过 X-API-Key 调用接口。AstrBot 插件推荐使用 lease 领取任务，发送成功后 callback 回写结果。
+      </n-alert>
+      <n-code :code="apiGuide" language="bash" word-wrap />
+    </n-card>
+
     <n-data-table :columns="columns" :data="keys" :loading="loading" :pagination="false" :row-key="(r: any) => r.id" />
 
     <n-modal v-model:show="showCreate" preset="dialog" title="创建 API 密钥" positive-text="创建" negative-text="取消" @positive-click="handleCreate">
@@ -24,7 +31,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NDataTable, NSpace, NButton, NModal, NFormItem, NInput, NAlert, NTag, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NCode, NDataTable, NFormItem, NInput, NModal, NSpace, NTag, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
 const message = useMessage()
@@ -34,6 +41,21 @@ const showCreate = ref(false)
 const showKey = ref(false)
 const createName = ref('')
 const newKey = ref('')
+const apiGuide = `# 健康检查
+curl -H "X-API-Key: 你的密钥" http://你的后端地址:8000/api/external/push/health
+
+# 领取待推送资源，系统会把资源锁定为推送中，避免重复推送
+curl -X POST -H "X-API-Key: 你的密钥" "http://你的后端地址:8000/api/external/push/lease?limit=10"
+
+# 回调推送成功
+curl -X POST -H "X-API-Key: 你的密钥" -H "Content-Type: application/json" \\
+  -d '{"resource_id":1,"status":"success","message_id":"telegram-message-id"}' \\
+  http://你的后端地址:8000/api/external/push/callback
+
+# 回调推送失败
+curl -X POST -H "X-API-Key: 你的密钥" -H "Content-Type: application/json" \\
+  -d '{"resource_id":1,"status":"failed","error_message":"失败原因"}' \\
+  http://你的后端地址:8000/api/external/push/callback`
 
 const columns = [
   { title: 'ID', key: 'id', width: 50 },
@@ -70,11 +92,32 @@ async function handleCreate() {
   }
 }
 
-function copyKey() {
-  navigator.clipboard.writeText(newKey.value)
-  message.success('已复制')
+async function copyKey() {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(newKey.value)
+    } else {
+      fallbackCopy(newKey.value)
+    }
+    message.success('已复制')
+  } catch (e) {
+    fallbackCopy(newKey.value)
+    message.success('已复制')
+  }
   showKey.value = false
   newKey.value = ''
+}
+
+function fallbackCopy(text: string) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
 }
 
 async function toggleKey(row: any) {

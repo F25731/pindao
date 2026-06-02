@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple, Generator
+from typing import List, Tuple, Generator, Sequence
 from openpyxl import Workbook, load_workbook
 import csv
 
@@ -67,8 +67,8 @@ def read_file_stream(file_path: str, batch_size: int = 2000) -> Generator[List[T
 
 def write_excel(
     file_path: str,
-    rows: List[Tuple[str, str, str]],
-    headers: Tuple[str, str, str] = ("名称", "标签", "链接"),
+    rows: List[Sequence[str]],
+    headers: Sequence[str] = ("名称", "标签", "链接"),
 ):
     """写入 Excel 文件。"""
     wb = Workbook()
@@ -77,7 +77,7 @@ def write_excel(
     ws.append(headers)
     for row in rows:
         ws.append(row)
-    ws.column_dimensions["A"].width = 40
-    ws.column_dimensions["B"].width = 20
-    ws.column_dimensions["C"].width = 60
+    widths = [40, 20, 65, 65, 24, 24]
+    for index, width in enumerate(widths[:len(headers)], start=1):
+        ws.column_dimensions[chr(64 + index)].width = width
     wb.save(file_path)
