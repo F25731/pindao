@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session, engine
 from app.config import settings
 from app.models import Base, Task, Resource, GuangyaAccount
+from app.services.schema_service import ensure_runtime_indexes, ensure_runtime_schema
 from app.worker.transfer_handler import execute_transfer
 
 logging.basicConfig(
@@ -160,6 +161,8 @@ async def main():
     logger.info("光鸭资源转存 Worker 启动中...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_runtime_schema(conn)
+        await ensure_runtime_indexes(conn)
     await worker_loop()
 
 
