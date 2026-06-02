@@ -6,13 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, Resource, Task
-from app.services.system_control import get_worker_control, set_worker_control
+from app.services.system_control import get_worker_concurrency, get_worker_control, set_worker_concurrency, set_worker_control
 
 router = APIRouter()
 
 
 class PauseRequest(BaseModel):
     reason: str | None = None
+
+
+class ConcurrencyRequest(BaseModel):
+    max_concurrent: int
 
 
 @router.get("/control")
@@ -27,6 +31,7 @@ async def get_control(
     return {
         "worker_paused": bool(control.get("paused")),
         "reason": control.get("reason") or "",
+        "max_concurrent": await get_worker_concurrency(db),
         "updated_at": control.get("updated_at"),
         "running_tasks": running or 0,
         "pending_tasks": pending or 0,
@@ -97,5 +102,21 @@ async def resume_system(
     await db.commit()
     return {
         "ok": True,
+        "worker_paused": bool(control.get("paused")),
+    }
+
+
+@router.post("/concurrency")
+async def update_concurrency(
+    req: ConcurrencyRequest,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    value = max(1, min(int(req.max_concurrent), 10))
+    control = await set_worker_concurrency(db, value)
+    await db.commit()
+    return {
+        "ok": True,
+        "max_concurrent": control.get("max_concurrent"),
         "worker_paused": bool(control.get("paused")),
     }

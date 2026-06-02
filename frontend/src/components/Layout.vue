@@ -18,6 +18,22 @@
         <span style="font-size: 16px; font-weight: 500;">{{ pageTitle }}</span>
         <n-space align="center">
           <n-tag v-if="systemControl.worker_paused" type="error" size="small">全局已暂停</n-tag>
+          <span class="control-label">线程</span>
+          <n-input-number
+            v-model:value="concurrencyValue"
+            size="small"
+            :min="1"
+            :max="10"
+            :show-button="false"
+            style="width: 72px;"
+          />
+          <n-button
+            size="small"
+            :loading="concurrencyLoading"
+            @click="saveConcurrency"
+          >
+            应用
+          </n-button>
           <n-button
             size="small"
             :type="systemControl.worker_paused ? 'primary' : 'warning'"
@@ -42,7 +58,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NLayout, NLayoutSider, NLayoutHeader, NLayoutContent,
-  NMenu, NButton, NSpace, NTag, useMessage
+  NMenu, NButton, NSpace, NTag, NInputNumber, useMessage
 } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
@@ -53,9 +69,12 @@ const route = useRoute()
 const authStore = useAuthStore()
 const message = useMessage()
 const systemActionLoading = ref(false)
+const concurrencyLoading = ref(false)
+const concurrencyValue = ref(2)
 const systemControl = ref({
   worker_paused: false,
   reason: '',
+  max_concurrent: 2,
   running_tasks: 0,
   pending_tasks: 0,
   paused_tasks: 0,
@@ -107,8 +126,24 @@ async function loadSystemControl() {
   try {
     const res = await api.get('/api/system/control')
     systemControl.value = res.data
+    concurrencyValue.value = res.data.max_concurrent || 2
   } catch (e) {
     console.error('加载系统控制状态失败', e)
+  }
+}
+
+async function saveConcurrency() {
+  concurrencyLoading.value = true
+  try {
+    const value = Math.max(1, Math.min(Number(concurrencyValue.value || 1), 10))
+    const res = await api.post('/api/system/concurrency', { max_concurrent: value })
+    systemControl.value = { ...systemControl.value, max_concurrent: res.data.max_concurrent }
+    concurrencyValue.value = res.data.max_concurrent
+    message.success(`转存线程数已设置为 ${res.data.max_concurrent}，worker 将实时按新值调度`)
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '设置线程数失败')
+  } finally {
+    concurrencyLoading.value = false
   }
 }
 
@@ -142,5 +177,10 @@ onMounted(loadSystemControl)
   font-size: 18px;
   font-weight: bold;
   border-bottom: 1px solid var(--n-border-color);
+}
+
+.control-label {
+  color: #666;
+  font-size: 13px;
 }
 </style>

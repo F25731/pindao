@@ -14,7 +14,7 @@ from app.config import settings
 from app.models import Base, Task, Resource, GuangyaAccount
 from app.services.import_service import process_next_import_batch
 from app.services.schema_service import ensure_runtime_database
-from app.services.system_control import is_worker_paused
+from app.services.system_control import get_worker_concurrency, is_worker_paused
 from app.services.system_log import append_system_log
 from app.worker.transfer_handler import execute_transfer
 
@@ -155,8 +155,9 @@ async def worker_loop():
                     await db.commit()
                     logger.info(f"导入管道处理 {imported} 行")
 
+                max_concurrent = await get_worker_concurrency(db)
                 running = await get_running_count(db)
-                available_slots = max(settings.worker_max_concurrent - running, 0)
+                available_slots = max(max_concurrent - running, 0)
                 if available_slots <= 0:
                     await asyncio.sleep(settings.worker_poll_interval)
                     continue
