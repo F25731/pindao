@@ -34,7 +34,6 @@ const columns = [
   { title: '进度', key: 'progress', width: 90, render: (row: any) => progressText(row) },
   { title: '新增', key: 'new_count', width: 70 },
   { title: '重复跳过', key: 'duplicate_skipped', width: 90 },
-  { title: '疑似重复', key: 'fuzzy_flagged', width: 90 },
   { title: '解析失败', key: 'parse_failed', width: 90 },
   {
     title: '状态', key: 'status', width: 100,

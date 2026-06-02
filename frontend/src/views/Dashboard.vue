@@ -45,7 +45,6 @@ const statCards = computed(() => [
   { label: '已推送', value: overview.value['已推送'] || 0 },
   { label: '待推送', value: overview.value['待推送'] || 0 },
   { label: '推送队列', value: overview.value['推送队列'] || 0 },
-  { label: '疑似重复待审核', value: overview.value['疑似重复待审核'] || 0 },
   { label: '失败待重试', value: overview.value['失败待重试'] || 0 },
   { label: '最终失败', value: overview.value['最终失败'] || 0 },
   { label: '今日处理', value: overview.value['今日处理'] || 0 },

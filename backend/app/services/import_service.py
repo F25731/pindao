@@ -8,15 +8,13 @@ from typing import Iterable, Set
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import DuplicateReview, ImportBatch, RawImportRow, Resource, Task
+from app.models import ImportBatch, RawImportRow, Resource, Task
 from app.utils.excel_io import read_file_raw_stream
-from app.utils.fuzzy_match import is_fuzzy_duplicate
 from app.utils.link_parser import normalize_name, parse_share_link, parse_tags
 
 RAW_LOAD_BATCH_SIZE = 2000
 PROCESS_BATCH_SIZE = 500
 DEDUP_BATCH_SIZE = 500
-FUZZY_CANDIDATE_LIMIT = 1000
 
 
 async def enqueue_import(
@@ -139,8 +137,6 @@ async def process_import_rows(db: AsyncSession, batch: ImportBatch, limit: int =
 
     existing_links = await _batch_check_links(db, batch_links)
     existing_share_keys = await _batch_check_share_keys(db, batch_share_ids)
-    fuzzy_candidates = await _load_fuzzy_candidates(db)
-
     resources_to_add = []
     resource_context = []
     for raw_row, name, tags, link, share_id, extract_code in parsed_rows:
@@ -169,7 +165,7 @@ async def process_import_rows(db: AsyncSession, batch: ImportBatch, limit: int =
             status="待转存",
         )
         resources_to_add.append(resource)
-        resource_context.append((raw_row, resource, name_norm, tags_list))
+        resource_context.append((raw_row, resource))
 
     for resource in resources_to_add:
         db.add(resource)
@@ -177,49 +173,20 @@ async def process_import_rows(db: AsyncSession, batch: ImportBatch, limit: int =
         await db.flush()
 
     tasks_to_add = []
-    reviews_to_add = []
-    for raw_row, resource, name_norm, tags_list in resource_context:
-        fuzzy_found = False
-        for existing_id, existing_name_norm, existing_tags in fuzzy_candidates:
-            is_dup, score, reason = is_fuzzy_duplicate(
-                name_norm,
-                tags_list,
-                existing_name_norm,
-                existing_tags,
-            )
-            if is_dup:
-                reviews_to_add.append(DuplicateReview(
-                    new_resource_id=resource.id,
-                    existing_resource_id=existing_id,
-                    similarity_score=score,
-                    match_reason=reason,
-                ))
-                resource.status = "疑似重复待审核"
-                raw_row.status = "fuzzy_review"
-                raw_row.resource_id = resource.id
-                raw_row.error_message = reason
-                batch.fuzzy_flagged += 1
-                fuzzy_found = True
-                break
-
-        if not fuzzy_found:
-            tasks_to_add.append(Task(
-                resource_id=resource.id,
-                task_type="transfer",
-                status="pending",
-            ))
-            raw_row.status = "imported"
-            raw_row.resource_id = resource.id
-            batch.new_count += 1
-
+    for raw_row, resource in resource_context:
+        tasks_to_add.append(Task(
+            resource_id=resource.id,
+            task_type="transfer",
+            status="pending",
+        ))
+        raw_row.status = "imported"
+        raw_row.resource_id = resource.id
+        batch.new_count += 1
         batch.valid_rows += 1
         batch.processed_rows += 1
-        _remember_fuzzy_candidate(fuzzy_candidates, resource.id, name_norm, tags_list)
 
     if tasks_to_add:
         db.add_all(tasks_to_add)
-    if reviews_to_add:
-        db.add_all(reviews_to_add)
 
     await db.commit()
     return len(raw_rows)
@@ -259,27 +226,6 @@ def _mark_duplicate(batch: ImportBatch, row: RawImportRow, reason: str) -> None:
     batch.duplicate_skipped += 1
     batch.valid_rows += 1
     batch.processed_rows += 1
-
-
-async def _load_fuzzy_candidates(db: AsyncSession):
-    result = await db.execute(
-        select(Resource.id, Resource.name_normalized, Resource.tags_array).where(
-            Resource.name_normalized.isnot(None),
-            Resource.status.notin_(["精确重复已跳过", "人工确认跳过"]),
-        ).order_by(Resource.id.desc()).limit(FUZZY_CANDIDATE_LIMIT)
-    )
-    return [(r[0], r[1] or "", r[2] or []) for r in result.all()]
-
-
-def _remember_fuzzy_candidate(
-    candidates: list[tuple[int, str, list]],
-    resource_id: int,
-    name_normalized: str,
-    tags_array: list,
-) -> None:
-    candidates.insert(0, (resource_id, name_normalized or "", tags_array or []))
-    if len(candidates) > FUZZY_CANDIDATE_LIMIT:
-        candidates.pop()
 
 
 async def _batch_check_links(db: AsyncSession, links: Iterable[str]) -> Set[str]:

@@ -52,7 +52,6 @@ const statusOptions = [
   { label: '已推送', value: '已推送' },
   { label: '失败待重试', value: '失败待重试' },
   { label: '最终失败', value: '最终失败' },
-  { label: '疑似重复待审核', value: '疑似重复待审核' },
   { label: '精确重复已跳过', value: '精确重复已跳过' },
   { label: '人工确认跳过', value: '人工确认跳过' },
 ]
@@ -69,7 +68,6 @@ const statusColorMap: Record<string, string> = {
   '已推送': 'success',
   '失败待重试': 'error',
   '最终失败': 'error',
-  '疑似重复待审核': 'warning',
 }
 
 const columns = [

@@ -139,8 +139,6 @@ async def worker_loop():
                 imported = await process_next_import_batch(db, limit=500)
                 if imported:
                     logger.info(f"导入管道处理 {imported} 行")
-                    await asyncio.sleep(1)
-                    continue
 
                 running = await get_running_count(db)
                 if running >= settings.worker_max_concurrent:
