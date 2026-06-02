@@ -22,6 +22,12 @@ def generate_traceparent() -> str:
     return f"00-{token_hex(16)}-{token_hex(8)}-01"
 
 
+def with_client_id(payload: dict | None = None) -> dict:
+    data = dict(payload or {})
+    data.setdefault("clientId", CLIENT_ID)
+    return data
+
+
 class GuangyaClient:
     """异步光鸭 API 客户端，每个账号实例化一个。"""
 
@@ -42,6 +48,7 @@ class GuangyaClient:
             "referer": "https://www.guangyapan.com/",
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
             "traceparent": generate_traceparent(),
+            "x-client-id": CLIENT_ID,
         }
 
     def _account_headers(self) -> dict:
@@ -142,7 +149,7 @@ class GuangyaClient:
             resp = await client.post(
                 f"{settings.guangya_api_base}/nd.bizuserres.s/v1/get_share_access_token",
                 headers=headers,
-                json={"shareId": share_id, "code": code},
+                json=with_client_id({"shareId": share_id, "code": code}),
             )
             resp.raise_for_status()
             return resp.json()
@@ -163,14 +170,14 @@ class GuangyaClient:
             resp = await client.post(
                 f"{settings.guangya_api_base}/nd.bizuserres.s/v1/get_share_page_files_list",
                 headers=headers,
-                json={
+                json=with_client_id({
                     "accessToken": access_token,
                     "parentId": parent_id,
                     "page": page,
                     "pageSize": 50,
                     "orderBy": 0,
                     "sortType": 0,
-                },
+                }),
             )
             resp.raise_for_status()
             return resp.json()
@@ -180,7 +187,7 @@ class GuangyaClient:
     async def restore_share(self, access_token: str, file_ids: List[str], parent_id: str = "") -> dict:
         return await self._request(
             f"{settings.guangya_api_base}/nd.bizuserres.s/v1/restore_share",
-            {"accessToken": access_token, "fileIds": file_ids, "parentId": parent_id},
+            with_client_id({"accessToken": access_token, "fileIds": file_ids, "parentId": parent_id}),
         )
 
     async def create_share(
@@ -190,7 +197,7 @@ class GuangyaClient:
         code: str = "",
         validate_duration: int = 0,
     ) -> dict:
-        payload = {
+        payload = with_client_id({
             "fileIds": file_ids,
             "title": title,
             "validateDuration": validate_duration,
@@ -199,7 +206,7 @@ class GuangyaClient:
             "trafficLimit": "0",
             "maxRestoreCount": 0,
             "downloadType": 1,
-        }
+        })
         if code:
             payload["code"] = code
         return await self._request(
@@ -210,19 +217,19 @@ class GuangyaClient:
     async def get_file_list(self, parent_id: str = "", page: int = 0) -> dict:
         return await self._request(
             f"{settings.guangya_api_base}/nd.bizuserres.s/v1/file/get_file_list",
-            {
+            with_client_id({
                 "parentId": parent_id,
                 "page": page,
                 "pageSize": 200,
                 "orderBy": 3,
                 "sortType": 1,
-            },
+            }),
         )
 
     async def get_share_list(self, page: int = 0) -> dict:
         return await self._request(
             f"{settings.guangya_api_base}/nd.bizuserres.s/v1/get_share_list",
-            {"page": page, "pageSize": 50, "orderType": 1, "sortType": 1},
+            with_client_id({"page": page, "pageSize": 50, "orderType": 1, "sortType": 1}),
         )
 
     async def user_info(self) -> dict:
