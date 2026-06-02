@@ -23,7 +23,7 @@ class Resource(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="待转存")
 
     transfer_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("guangya_accounts.id"))
-    transferred_file_id: Mapped[Optional[str]] = mapped_column(String(128))
+    transferred_file_id: Mapped[Optional[str]] = mapped_column(Text)
     new_share_id: Mapped[Optional[str]] = mapped_column(String(128))
     new_extract_code: Mapped[Optional[str]] = mapped_column(String(64))
     new_share_link: Mapped[Optional[str]] = mapped_column(Text)

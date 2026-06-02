@@ -113,7 +113,8 @@ async def process_task(task_id: int):
         try:
             await execute_transfer(db, task, resource)
         except Exception as e:
-            logger.error(f"任务执行异常: task_id={task.id}, error={e}")
+            logger.error("任务执行异常: task_id=%s, error=%s", task_id, e)
+            await db.rollback()
             # execute_transfer 内部已处理状态，这里是兜底
             async with async_session() as db2:
                 result2 = await db2.execute(select(Task).where(Task.id == task_id))
