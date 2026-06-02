@@ -48,6 +48,19 @@ class TaskListResponse(BaseModel):
     total: int
 
 
+class FailedTaskOut(TaskOut):
+    resource_name: Optional[str] = None
+    resource_status: Optional[str] = None
+    original_link: Optional[str] = None
+    new_share_link: Optional[str] = None
+    resource_error_message: Optional[str] = None
+
+
+class FailedTaskListResponse(BaseModel):
+    items: List[FailedTaskOut]
+    total: int
+
+
 class BatchTaskRequest(BaseModel):
     task_ids: List[int]
 
@@ -99,6 +112,60 @@ async def queue_status(
         )
         counts[s] = result.scalar()
     return counts
+
+
+@router.get("/failed", response_model=FailedTaskListResponse)
+async def list_failed_tasks(
+    page: int = 0,
+    page_size: int = 20,
+    search: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    failed_statuses = ("failed_retryable", "failed_final")
+    query = (
+        select(Task, Resource)
+        .join(Resource, Task.resource_id == Resource.id, isouter=True)
+        .where(Task.status.in_(failed_statuses))
+    )
+    count_query = select(func.count(Task.id)).where(Task.status.in_(failed_statuses))
+
+    if search:
+        keyword = f"%{search.strip()}%"
+        search_filter = (
+            Resource.name.ilike(keyword)
+            | Resource.original_link.ilike(keyword)
+            | Resource.new_share_link.ilike(keyword)
+            | Task.error_message.ilike(keyword)
+            | Resource.error_message.ilike(keyword)
+        )
+        query = query.where(search_filter)
+        count_query = (
+            select(func.count(Task.id))
+            .join(Resource, Task.resource_id == Resource.id, isouter=True)
+            .where(Task.status.in_(failed_statuses), search_filter)
+        )
+
+    total = await db.scalar(count_query)
+    result = await db.execute(
+        query.order_by(Task.updated_at.desc(), Task.created_at.desc())
+        .offset(page * page_size)
+        .limit(page_size)
+    )
+
+    items = []
+    for task, resource in result.all():
+        data = TaskOut.model_validate(task).model_dump()
+        data.update({
+            "resource_name": resource.name if resource else None,
+            "resource_status": resource.status if resource else None,
+            "original_link": resource.original_link if resource else None,
+            "new_share_link": resource.new_share_link if resource else None,
+            "resource_error_message": resource.error_message if resource else None,
+        })
+        items.append(FailedTaskOut(**data))
+
+    return FailedTaskListResponse(items=items, total=total or 0)
 
 
 def _set_task_paused(task: Task, resource: Resource | None):

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from datetime import datetime, timezone, timedelta
 
 from app.database import get_db
@@ -29,6 +29,19 @@ async def overview(
 
     total_result = await db.execute(select(func.count(Resource.id)))
     counts["总资源数"] = total_result.scalar()
+
+    transferred_result = await db.execute(
+        select(func.count(Resource.id)).where(
+            or_(Resource.transferred_at.is_not(None), Resource.new_share_link.is_not(None))
+        )
+    )
+    counts["转存成功"] = transferred_result.scalar()
+
+    task_statuses = ["pending", "running", "paused", "failed_retryable", "failed_final", "success", "skipped"]
+    for status in task_statuses:
+        result = await db.execute(select(func.count(Task.id)).where(Task.status == status))
+        counts[f"任务_{status}"] = result.scalar()
+    counts["转存失败任务"] = (counts.get("任务_failed_retryable") or 0) + (counts.get("任务_failed_final") or 0)
 
     # 今日处理
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
