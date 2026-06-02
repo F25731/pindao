@@ -5,6 +5,7 @@
       <n-button @click="showTokenAdd = true">Token 直接添加</n-button>
       <n-button :loading="loading" @click="loadData">刷新列表</n-button>
       <n-button :loading="refreshingAll" @click="refreshAllAccounts">刷新全部容量</n-button>
+      <n-button type="primary" :loading="resumingTransfers" @click="resumeAccountBlocked">一键继续转存</n-button>
     </n-space>
 
     <n-data-table :columns="columns" :data="accounts" :loading="loading" :pagination="false" :row-key="(r: any) => r.id" />
@@ -80,6 +81,7 @@ const loading = ref(false)
 const showSmsLogin = ref(false)
 const showTokenAdd = ref(false)
 const refreshingAll = ref(false)
+const resumingTransfers = ref(false)
 
 // SMS 登录状态
 const smsStep = ref(1)
@@ -301,6 +303,18 @@ async function refreshAllAccounts() {
     message.error(e.response?.data?.detail || '刷新失败')
   } finally {
     refreshingAll.value = false
+  }
+}
+
+async function resumeAccountBlocked() {
+  resumingTransfers.value = true
+  try {
+    const res = await api.post('/api/tasks/resume-account-blocked')
+    message.success(`已恢复 ${res.data.updated || 0} 个账号容量相关任务`)
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '恢复失败')
+  } finally {
+    resumingTransfers.value = false
   }
 }
 

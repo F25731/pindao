@@ -9,6 +9,7 @@
 
     <n-space style="margin-bottom: 16px;">
       <n-button size="small" :loading="loading" @click="loadData">刷新</n-button>
+      <n-button size="small" type="primary" :loading="resumingAccountBlocked" @click="resumeAccountBlocked">账号满后一键继续</n-button>
       <n-button size="small" type="warning" :disabled="!selectedIds.length" @click="batchAction('pause')">批量暂停</n-button>
       <n-button size="small" type="primary" :disabled="!selectedIds.length" @click="batchAction('start')">批量开始</n-button>
       <n-button size="small" :disabled="!selectedIds.length" @click="batchAction('retry')">批量重试</n-button>
@@ -45,6 +46,7 @@ const total = ref(0)
 const pageSize = 20
 const queueStatus = ref<Record<string, number>>({})
 const selectedIds = ref<number[]>([])
+const resumingAccountBlocked = ref(false)
 
 const pageCount = computed(() => Math.ceil(total.value / pageSize))
 
@@ -107,6 +109,20 @@ async function batchAction(action: 'pause' | 'start' | 'retry' | 'cancel') {
     loadData()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '批量操作失败')
+  }
+}
+
+async function resumeAccountBlocked() {
+  resumingAccountBlocked.value = true
+  try {
+    const res = await api.post('/api/tasks/resume-account-blocked')
+    message.success(`已恢复 ${res.data.updated || 0} 个账号容量相关任务`)
+    selectedIds.value = []
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '恢复失败')
+  } finally {
+    resumingAccountBlocked.value = false
   }
 }
 

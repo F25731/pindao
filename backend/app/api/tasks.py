@@ -7,10 +7,22 @@ from datetime import datetime, timezone
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import AdminUser, Resource, Task
+from app.models import AdminUser, GuangyaAccount, Resource, Task
 from app.services.delete_service import delete_resources_permanently
 
 router = APIRouter()
+
+ACCOUNT_BLOCKED_KEYWORDS = (
+    "没有可用账号",
+    "无可用账号",
+    "可用账号",
+    "账号容量",
+    "容量不足",
+    "空间不足",
+    "账号已满",
+    "分配的账号不可用",
+    "切换账号",
+)
 
 
 class TaskOut(BaseModel):
@@ -121,6 +133,7 @@ def _set_task_started(task: Task, resource: Resource | None):
     checkpoint.pop("cancel_requested", None)
     task.checkpoint = checkpoint
     task.status = "pending"
+    task.account_id = None
     task.next_retry_at = None
     task.completed_at = None
     if task.error_message or old_status in ("failed_final", "failed_retryable", "skipped"):
@@ -132,6 +145,7 @@ def _set_task_started(task: Task, resource: Resource | None):
 
 def _set_task_retry(task: Task, resource: Resource | None):
     task.status = "pending"
+    task.account_id = None
     task.attempt = 0
     task.error_message = None
     task.error_response = None
@@ -141,9 +155,33 @@ def _set_task_retry(task: Task, resource: Resource | None):
     task.next_retry_at = None
     if resource:
         resource.status = "待转存"
+        resource.transfer_account_id = None
         resource.retry_count = 0
         resource.error_message = None
         resource.error_response = None
+
+
+def _is_account_blocked_task(task: Task, resource: Resource | None) -> bool:
+    if task.task_type != "transfer":
+        return False
+    if task.status not in ("paused", "failed_retryable", "failed_final"):
+        return False
+
+    parts = [
+        task.error_message or "",
+        str(task.error_response or ""),
+        str(task.checkpoint or ""),
+    ]
+    if resource:
+        parts.extend(
+            [
+                resource.status or "",
+                resource.error_message or "",
+                str(resource.error_response or ""),
+            ]
+        )
+    text = " ".join(parts)
+    return any(keyword in text for keyword in ACCOUNT_BLOCKED_KEYWORDS)
 
 
 async def _load_tasks_with_resources(db: AsyncSession, task_ids: List[int]):
@@ -157,6 +195,45 @@ async def _load_tasks_with_resources(db: AsyncSession, task_ids: List[int]):
         res_result = await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
         resources = {resource.id: resource for resource in res_result.scalars().all()}
     return tasks, resources
+
+
+@router.post("/resume-account-blocked")
+async def resume_account_blocked_tasks(
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    available_accounts = await db.scalar(
+        select(func.count(GuangyaAccount.id)).where(GuangyaAccount.status == "available")
+    )
+    if not available_accounts:
+        raise HTTPException(status_code=400, detail="没有可用账号，请先新增或启用至少一个光鸭账号")
+
+    result = await db.execute(
+        select(Task, Resource)
+        .join(Resource, Task.resource_id == Resource.id)
+        .where(
+            Task.task_type == "transfer",
+            Task.status.in_(("paused", "failed_retryable", "failed_final")),
+        )
+        .order_by(Task.created_at.asc())
+    )
+
+    updated = 0
+    skipped = 0
+    for task, resource in result.all():
+        if not _is_account_blocked_task(task, resource):
+            skipped += 1
+            continue
+        _set_task_retry(task, resource)
+        updated += 1
+
+    await db.commit()
+    return {
+        "ok": True,
+        "updated": updated,
+        "skipped": skipped,
+        "available_accounts": available_accounts,
+    }
 
 
 @router.post("/{task_id}/cancel")

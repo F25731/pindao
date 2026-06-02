@@ -61,7 +61,12 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
         if "account_id" not in checkpoint:
             account = await select_available_account(db)
             if not account:
-                await _fail_retryable(db, task, resource, "没有可用账号", retry_minutes=5)
+                await _pause_until_account_available(
+                    db,
+                    task,
+                    resource,
+                    "没有可用账号，请新增或启用账号后点击一键继续转存",
+                )
                 return
             checkpoint["account_id"] = account.id
             task.account_id = account.id
@@ -623,6 +628,26 @@ async def _pause_following_transfer_tasks(
             queued_resource.status = "转存暂停"
             queued_resource.error_message = message
     return len(tasks)
+
+
+async def _pause_until_account_available(
+    db: AsyncSession,
+    task: Task,
+    resource: Resource,
+    message: str,
+    resp: dict = None,
+):
+    task.status = "paused"
+    task.error_message = message
+    task.error_response = resp
+    task.next_retry_at = None
+    task.completed_at = None
+    resource.status = "转存暂停"
+    resource.error_message = message
+    resource.error_response = resp
+    paused_count = await _pause_following_transfer_tasks(db, task.id, message)
+    await db.commit()
+    logger.warning(f"账号池无可用账号，转存队列已暂停: task_id={task.id}, paused_following={paused_count}")
 
 
 async def _continue_with_new_account(
