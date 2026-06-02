@@ -5,7 +5,7 @@ from app.api.accounts import router as accounts_router
 from app.api.imports import router as imports_router
 from app.api.resources import router as resources_router
 from app.api.tasks import router as tasks_router
-from app.api.duplicates import router as duplicates_router
+# from app.api.duplicates import router as duplicates_router  # 模糊去重功能已禁用
 from app.api.telegram import router as telegram_router
 from app.api.api_keys import router as api_keys_router
 from app.api.export import router as export_router
@@ -22,7 +22,7 @@ api_router.include_router(guangya_login_router, prefix="/accounts/login", tags=[
 api_router.include_router(imports_router, prefix="/imports", tags=["导入"])
 api_router.include_router(resources_router, prefix="/resources", tags=["资源"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["任务"])
-api_router.include_router(duplicates_router, prefix="/duplicates", tags=["去重审核"])
+# api_router.include_router(duplicates_router, prefix="/duplicates", tags=["去重审核"])  # 模糊去重功能已禁用
 api_router.include_router(telegram_router, prefix="/telegram", tags=["推送管理"])
 api_router.include_router(api_keys_router, prefix="/api-keys", tags=["API密钥"])
 api_router.include_router(export_router, prefix="/export", tags=["导出"])

@@ -12,9 +12,9 @@ from app.models import ImportBatch, RawImportRow, Resource, Task
 from app.utils.excel_io import read_file_raw_stream
 from app.utils.link_parser import normalize_name, parse_share_link, parse_tags
 
-RAW_LOAD_BATCH_SIZE = 2000
-PROCESS_BATCH_SIZE = 500
-DEDUP_BATCH_SIZE = 500
+RAW_LOAD_BATCH_SIZE = 5000
+PROCESS_BATCH_SIZE = 2000
+DEDUP_BATCH_SIZE = 1000
 
 
 async def enqueue_import(
@@ -135,6 +135,7 @@ async def process_import_rows(db: AsyncSession, batch: ImportBatch, limit: int =
         batch_links.append(link)
         batch_share_ids.append(share_id)
 
+    # 优化：如果不需要精确去重，可以注释掉这两行以提升性能
     existing_links = await _batch_check_links(db, batch_links)
     existing_share_keys = await _batch_check_share_keys(db, batch_share_ids)
     resources_to_add = []

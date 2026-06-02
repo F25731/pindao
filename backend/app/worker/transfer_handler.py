@@ -123,6 +123,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             except httpx.HTTPStatusError as e:
                 await _handle_share_error(db, task, resource, account, e)
                 return
+            except Exception as e:
+                await _fail_retryable(db, task, resource, f"获取分享访问令牌网络异常: {str(e)[:200]}")
+                return
 
             if _has_api_error(token_resp):
                 await _fail_final(db, task, resource, _format_api_error("获取分享访问令牌失败", token_resp), token_resp)
@@ -148,6 +151,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
             except httpx.HTTPStatusError as e:
                 await _handle_share_error(db, task, resource, account, e)
+                return
+            except Exception as e:
+                await _fail_retryable(db, task, resource, f"获取分享文件列表网络异常: {str(e)[:200]}")
                 return
 
             if _has_api_error(files_resp):
@@ -185,6 +191,9 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
             except httpx.HTTPStatusError as e:
                 await _handle_transfer_error(db, task, resource, account, e)
+                return
+            except Exception as e:
+                await _fail_retryable(db, task, resource, f"转存操作网络异常: {str(e)[:200]}")
                 return
 
             if _has_api_error(restore_resp):
@@ -238,13 +247,18 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
                 return
 
+            new_code = generate_extract_code()
             try:
                 share_resp = await client.create_share(
                     file_ids=transferred_file_ids,
                     title=resource.name,
+                    code=new_code,
                 )
             except httpx.HTTPStatusError as e:
                 await _handle_transfer_error(db, task, resource, account, e)
+                return
+            except Exception as e:
+                await _fail_retryable(db, task, resource, f"创建分享网络异常: {str(e)[:200]}")
                 return
 
             if _has_api_error(share_resp):
@@ -257,7 +271,7 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
             new_share_url = _extract_share_url(share_resp)
             new_share_id = _extract_new_share_id(share_resp)
-            actual_code = _extract_share_code(share_resp) or ""
+            actual_code = _extract_share_code(share_resp) or new_code
             if new_share_url:
                 url_share_id, url_code = _parse_built_share_link(new_share_url)
                 new_share_id = url_share_id or new_share_id
