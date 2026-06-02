@@ -2,6 +2,7 @@
   <div>
     <n-space style="margin-bottom: 16px;">
       <n-button type="primary" @click="showCreate = true">创建 API 密钥</n-button>
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
     </n-space>
 
     <n-card title="API 调用说明" size="small" style="margin-bottom: 16px;">

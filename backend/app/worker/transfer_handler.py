@@ -585,8 +585,44 @@ async def _fail_final(
     resource.status = "最终失败"
     resource.error_message = message
     resource.error_response = resp
+    paused_count = await _pause_following_transfer_tasks(db, task.id, message)
     await db.commit()
-    logger.error(f"任务最终失败: task_id={task.id}, msg={message}")
+    logger.error(f"任务最终失败: task_id={task.id}, paused_following={paused_count}, msg={message}")
+
+
+async def _pause_following_transfer_tasks(
+    db: AsyncSession,
+    failed_task_id: int,
+    reason: str,
+) -> int:
+    result = await db.execute(
+        select(Task).where(
+            Task.id != failed_task_id,
+            Task.task_type == "transfer",
+            Task.status.in_(("pending", "failed_retryable")),
+        )
+    )
+    tasks = result.scalars().all()
+    if not tasks:
+        return 0
+
+    resource_ids = [task.resource_id for task in tasks]
+    resources = {}
+    if resource_ids:
+        res_result = await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
+        resources = {resource.id: resource for resource in res_result.scalars().all()}
+
+    message = f"前序资源最终失败，队列已自动暂停，请检查后手动继续：{reason[:200]}"
+    for queued_task in tasks:
+        queued_task.status = "paused"
+        queued_task.next_retry_at = None
+        if not queued_task.error_message:
+            queued_task.error_message = message
+        queued_resource = resources.get(queued_task.resource_id)
+        if queued_resource and queued_resource.status in ("待转存", "失败待重试"):
+            queued_resource.status = "转存暂停"
+            queued_resource.error_message = message
+    return len(tasks)
 
 
 async def _continue_with_new_account(

@@ -2,22 +2,12 @@
   <n-layout has-sider style="height: 100vh">
     <n-layout-sider
       bordered
-      :collapsed="collapsed"
-      collapse-mode="width"
-      :collapsed-width="64"
       :width="220"
-      show-trigger
-      @collapse="collapsed = true"
-      @expand="collapsed = false"
     >
       <div class="logo">
-        <span v-if="!collapsed">光鸭资源管理</span>
-        <span v-else>光</span>
+        <span>光鸭资源管理</span>
       </div>
       <n-menu
-        :collapsed="collapsed"
-        :collapsed-width="64"
-        :collapsed-icon-size="22"
         :options="menuOptions"
         :value="currentRoute"
         @update:value="handleMenuClick"
@@ -39,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, h } from 'vue'
+import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import {
   NLayout, NLayoutSider, NLayoutHeader, NLayoutContent,
@@ -51,7 +41,6 @@ import { useAuthStore } from '../stores/auth'
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const collapsed = ref(false)
 
 const currentRoute = computed(() => route.name as string)
 

@@ -1,5 +1,9 @@
 <template>
   <div>
+    <n-space style="margin-bottom: 16px;">
+      <n-button @click="exportResult = null">刷新</n-button>
+    </n-space>
+
     <n-card title="导出 Excel">
       <n-form inline>
         <n-form-item label="按批次">
@@ -23,7 +27,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NCard, NForm, NFormItem, NInputNumber, NSelect, NButton, useMessage } from 'naive-ui'
+import { NButton, NCard, NForm, NFormItem, NInputNumber, NSelect, NSpace, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
 const message = useMessage()

@@ -1,6 +1,7 @@
 <template>
   <div>
     <n-space style="margin-bottom: 16px;">
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
       <n-tag type="warning">待审核: {{ stats.pending || 0 }}</n-tag>
       <n-tag type="success">已处理: {{ stats.resolved || 0 }}</n-tag>
       <n-button type="primary" :disabled="!selectedIds.length" @click="batchDecide('skip')">批量跳过</n-button>

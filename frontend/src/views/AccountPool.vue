@@ -3,6 +3,7 @@
     <n-space style="margin-bottom: 16px;">
       <n-button type="primary" @click="showSmsLogin = true">手机号登录添加</n-button>
       <n-button @click="showTokenAdd = true">Token 直接添加</n-button>
+      <n-button :loading="loading" @click="loadData">刷新列表</n-button>
       <n-button :loading="refreshingAll" @click="refreshAllAccounts">刷新全部容量</n-button>
     </n-space>
 

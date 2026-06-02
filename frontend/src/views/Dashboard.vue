@@ -1,5 +1,9 @@
 <template>
   <div>
+    <n-space style="margin-bottom: 16px;">
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
+    </n-space>
+
     <n-grid :cols="4" :x-gap="16" :y-gap="16">
       <n-gi v-for="item in statCards" :key="item.label">
         <n-card size="small">
@@ -27,11 +31,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { NGrid, NGi, NCard, NStatistic, NEmpty } from 'naive-ui'
+import { NButton, NGrid, NGi, NCard, NStatistic, NEmpty, NSpace } from 'naive-ui'
 import { api } from '../api/client'
 
 const overview = ref<Record<string, number>>({})
 const dailyStats = ref<Array<{ date: string; transferred: number; pushed: number }>>([])
+const loading = ref(false)
 
 const statCards = computed(() => [
   { label: '总资源数', value: overview.value['总资源数'] || 0 },
@@ -48,7 +53,8 @@ const statCards = computed(() => [
   { label: '精确重复已跳过', value: overview.value['精确重复已跳过'] || 0 },
 ])
 
-onMounted(async () => {
+async function loadData() {
+  loading.value = true
   try {
     const [overviewRes, dailyRes] = await Promise.all([
       api.get('/api/stats/overview'),
@@ -58,6 +64,10 @@ onMounted(async () => {
     dailyStats.value = dailyRes.data
   } catch (e) {
     console.error('加载统计失败', e)
+  } finally {
+    loading.value = false
   }
-})
+}
+
+onMounted(loadData)
 </script>

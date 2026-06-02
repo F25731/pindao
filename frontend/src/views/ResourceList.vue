@@ -4,6 +4,7 @@
       <n-select v-model:value="statusFilter" :options="statusOptions" placeholder="按状态筛选" clearable style="width: 180px;" @update:value="loadData" />
       <n-input v-model:value="search" placeholder="搜名称/标签/源链接/新链接/错误" clearable style="width: 300px;" @clear="loadData" @keyup.enter="loadData" />
       <n-button @click="loadData">搜索</n-button>
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
       <n-button type="error" :disabled="!selectedIds.length" @click="deleteSelected">批量彻底删除</n-button>
     </n-space>
 

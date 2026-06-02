@@ -1,6 +1,7 @@
 <template>
   <div>
     <n-space style="margin-bottom: 16px;">
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
       <n-button type="primary" :disabled="!selectedIds.length" @click="batchRetry">批量重试 ({{ selectedIds.length }})</n-button>
     </n-space>
 

@@ -18,6 +18,7 @@
         @update:value="searchResources"
       />
       <n-button type="primary" :loading="loading" @click="searchResources">搜索</n-button>
+      <n-button :loading="loading" @click="loadData">刷新</n-button>
     </n-space>
 
     <n-data-table

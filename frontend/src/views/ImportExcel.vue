@@ -1,5 +1,9 @@
 <template>
   <div>
+    <n-space style="margin-bottom: 16px;">
+      <n-button @click="importResult = null">刷新</n-button>
+    </n-space>
+
     <n-card title="导入资源文件">
       <n-alert type="info" style="margin-bottom: 16px;">
         支持 .xlsx 和 .csv 格式。百万级数据建议使用 CSV（速度快 10 倍以上）。表格需包含三列：名称、标签、链接。
@@ -37,7 +41,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { NCard, NUpload, NUploadDragger, NDescriptions, NDescriptionsItem, useMessage } from 'naive-ui'
+import { NButton, NCard, NUpload, NUploadDragger, NDescriptions, NDescriptionsItem, NSpace, useMessage } from 'naive-ui'
 
 const message = useMessage()
 const importResult = ref<any>(null)

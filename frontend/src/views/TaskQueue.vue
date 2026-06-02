@@ -8,6 +8,7 @@
     </n-space>
 
     <n-space style="margin-bottom: 16px;">
+      <n-button size="small" :loading="loading" @click="loadData">刷新</n-button>
       <n-button size="small" type="warning" :disabled="!selectedIds.length" @click="batchAction('pause')">批量暂停</n-button>
       <n-button size="small" type="primary" :disabled="!selectedIds.length" @click="batchAction('start')">批量开始</n-button>
       <n-button size="small" :disabled="!selectedIds.length" @click="batchAction('retry')">批量重试</n-button>
