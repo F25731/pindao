@@ -190,30 +190,32 @@ class GuangyaClient:
         code: str = "",
         validate_duration: int = 0,
     ) -> dict:
+        payload = {
+            "fileIds": file_ids,
+            "title": title,
+            "validateDuration": validate_duration,
+            "shareType": 0,
+            "autoFillCode": False,
+            "trafficLimit": "0",
+            "maxRestoreCount": 0,
+            "downloadType": 1,
+        }
+        if code:
+            payload["code"] = code
         return await self._request(
             f"{settings.guangya_api_base}/nd.bizuserres.s/v1/share_file",
-            {
-                "fileIds": file_ids,
-                "title": title,
-                "validateDuration": validate_duration,
-                "shareType": 1,
-                "code": code,
-                "autoFillCode": False,
-                "trafficLimit": "0",
-                "maxRestoreCount": 0,
-                "downloadType": 1,
-            },
+            payload,
         )
 
     async def get_file_list(self, parent_id: str = "", page: int = 0) -> dict:
         return await self._request(
-            f"{settings.guangya_api_base}/userres/v1/file/get_file_list",
+            f"{settings.guangya_api_base}/nd.bizuserres.s/v1/file/get_file_list",
             {
                 "parentId": parent_id,
                 "page": page,
-                "pageSize": 50,
-                "orderBy": 0,
-                "sortType": 0,
+                "pageSize": 200,
+                "orderBy": 3,
+                "sortType": 1,
             },
         )
 

@@ -238,12 +238,10 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
                 return
 
-            new_code = generate_extract_code()
             try:
                 share_resp = await client.create_share(
                     file_ids=transferred_file_ids,
                     title=resource.name,
-                    code=new_code,
                 )
             except httpx.HTTPStatusError as e:
                 await _handle_transfer_error(db, task, resource, account, e)
@@ -259,12 +257,12 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
 
             new_share_url = _extract_share_url(share_resp)
             new_share_id = _extract_new_share_id(share_resp)
-            actual_code = _extract_share_code(share_resp) or new_code
+            actual_code = _extract_share_code(share_resp) or ""
             if new_share_url:
                 url_share_id, url_code = _parse_built_share_link(new_share_url)
                 new_share_id = url_share_id or new_share_id
                 actual_code = url_code or actual_code
-            if not new_share_id or actual_code != new_code:
+            if not new_share_id:
                 # 尝试从分享列表获取
                 try:
                     list_resp = await client.get_share_list(page=0)
@@ -634,7 +632,7 @@ def _normalize_share_code(value) -> Optional[str]:
     match = re.search(r"[?&]code=([^&#]+)", text)
     if match:
         return match.group(1)
-    if text in ("0", "200") or text.isdigit():
+    if text in ("0", "200"):
         return None
     if 4 <= len(text) <= 16 and re.match(r"^[A-Za-z0-9_-]+$", text):
         return text
