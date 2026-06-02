@@ -188,6 +188,14 @@ async def ensure_runtime_schema(conn):
         # runtime controls.
         "CREATE TABLE IF NOT EXISTS system_controls (key varchar(64) PRIMARY KEY, value jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz DEFAULT now())",
         "INSERT INTO system_controls (key, value) VALUES ('worker_control', '{\"paused\": false}'::jsonb) ON CONFLICT (key) DO NOTHING",
+        # browser-visible runtime logs.
+        "CREATE TABLE IF NOT EXISTS system_logs (id serial PRIMARY KEY, level varchar(16) NOT NULL DEFAULT 'info', source varchar(64) NOT NULL DEFAULT 'system', message text NOT NULL, details jsonb, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS level varchar(16) DEFAULT 'info'",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS source varchar(64) DEFAULT 'system'",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS message text",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS details jsonb",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()",
+        "ALTER TABLE system_logs ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()",
     ]
     for statement in statements:
         await conn.execute(text(statement))
@@ -209,6 +217,7 @@ async def ensure_runtime_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_resources_tags_trgm ON resources USING gin (tags gin_trgm_ops)",
         "CREATE INDEX IF NOT EXISTS idx_resources_original_link_trgm ON resources USING gin (original_link gin_trgm_ops)",
         "CREATE INDEX IF NOT EXISTS idx_resources_new_share_link_trgm ON resources USING gin (new_share_link gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC)",
     ]
     for statement in statements:
         await conn.execute(text(statement))

@@ -168,6 +168,27 @@ async def list_failed_tasks(
     return FailedTaskListResponse(items=items, total=total or 0)
 
 
+@router.post("/failed/retry-all")
+async def retry_all_failed_tasks(
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Task, Resource)
+        .join(Resource, Task.resource_id == Resource.id, isouter=True)
+        .where(Task.status.in_(("failed_retryable", "failed_final")))
+        .order_by(Task.created_at.asc())
+    )
+
+    updated = 0
+    for task, resource in result.all():
+        _set_task_retry(task, resource)
+        updated += 1
+
+    await db.commit()
+    return {"ok": True, "updated": updated}
+
+
 def _set_task_paused(task: Task, resource: Resource | None):
     if task.status == "running":
         checkpoint = task.checkpoint or {}

@@ -28,6 +28,7 @@ from app.services.account_pool import (
 )
 from app.utils.link_parser import build_share_link
 from app.config import settings
+from app.services.system_log import append_system_log
 
 logger = logging.getLogger("worker.transfer")
 
@@ -337,6 +338,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 client.refresh_token_value,
             )
 
+        await append_system_log(
+            db,
+            "success",
+            "transfer",
+            f"转存成功: resource_id={resource.id}, task_id={task.id}",
+            {"new_link": resource.new_share_link},
+        )
         await db.commit()
         logger.info(f"转存成功: resource_id={resource.id}, new_link={resource.new_share_link}")
 
@@ -383,6 +391,12 @@ async def _skip_if_exact_duplicate(
     task.status = "skipped"
     task.error_message = message
     task.completed_at = datetime.now(timezone.utc)
+    await append_system_log(
+        db,
+        "warning",
+        "transfer",
+        f"精确重复已跳过: resource_id={resource.id}, duplicate_of={existing.id}",
+    )
     await db.commit()
     logger.info(
         "转存前精确去重跳过: task_id=%s, resource_id=%s, duplicate_of=%s",
@@ -738,6 +752,12 @@ async def _fail_retryable(
     resource.status = "失败待重试"
     resource.error_message = message
     resource.retry_count += 1
+    await append_system_log(
+        db,
+        "warning",
+        "transfer",
+        f"任务可重试失败: task_id={task.id}, resource_id={resource.id}, attempt={task.attempt}, msg={message}",
+    )
     await db.commit()
     logger.warning(f"任务可重试失败: task_id={task.id}, attempt={task.attempt}, msg={message}")
 
@@ -754,6 +774,12 @@ async def _fail_final(
     resource.error_message = message
     resource.error_response = resp
     paused_count = await _pause_following_transfer_tasks(db, task.id, message) if pause_following else 0
+    await append_system_log(
+        db,
+        "error",
+        "transfer",
+        f"任务最终失败: task_id={task.id}, resource_id={resource.id}, paused_following={paused_count}, msg={message}",
+    )
     await db.commit()
     logger.error(f"任务最终失败: task_id={task.id}, paused_following={paused_count}, msg={message}")
 
@@ -827,6 +853,12 @@ async def _continue_with_new_account(
     resource.status = "待转存"
     resource.error_message = message
     resource.error_response = resp
+    await append_system_log(
+        db,
+        "warning",
+        "transfer",
+        f"任务切换账号继续: task_id={task.id}, resource_id={resource.id}, msg={message}",
+    )
     await db.commit()
     logger.warning(f"任务切换账号继续: task_id={task.id}, msg={message}")
 

@@ -18,6 +18,9 @@
       <n-button type="primary" :disabled="!selectedIds.length" @click="batchRetry">
         批量重试
       </n-button>
+      <n-button type="primary" secondary :disabled="!total" @click="retryAll">
+        全部重试
+      </n-button>
     </n-space>
 
     <n-data-table
@@ -69,7 +72,12 @@ const columns = [
   { title: '资源状态', key: 'resource_status', width: 120 },
   { title: '尝试次数', key: 'attempt', width: 90 },
   { title: '错误信息', key: 'error_message', minWidth: 260, ellipsis: { tooltip: true } },
-  { title: '源链接', key: 'original_link', minWidth: 220, ellipsis: { tooltip: true } },
+  {
+    title: '源链接',
+    key: 'original_link',
+    minWidth: 220,
+    render: (row: any) => renderCopyText(row.original_link),
+  },
   { title: '下次重试', key: 'next_retry_at', width: 160, render: (row: any) => row.next_retry_at?.slice(0, 19).replace('T', ' ') || '-' },
   {
     title: '操作', key: 'actions', width: 90,
@@ -97,6 +105,40 @@ async function batchRetry() {
   } catch (e: any) {
     message.error(e.response?.data?.detail || '批量重试失败')
   }
+}
+
+async function retryAll() {
+  if (!total.value) return
+  if (!window.confirm(`确定重试全部 ${total.value} 个失败任务？`)) return
+  try {
+    const res = await api.post('/api/tasks/failed/retry-all')
+    message.success(`已重试 ${res.data.updated || 0} 个任务`)
+    selectedIds.value = []
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '全部重试失败')
+  }
+}
+
+async function copyText(text?: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制链接')
+  } catch {
+    const input = document.createElement('textarea')
+    input.value = text
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    message.success('已复制链接')
+  }
+}
+
+function renderCopyText(text?: string) {
+  if (!text) return '-'
+  return h('button', { class: 'copy-link', onClick: () => copyText(text), title: '点击复制' }, text)
 }
 
 function reload() {
@@ -127,3 +169,18 @@ async function loadData() {
 
 onMounted(loadData)
 </script>
+
+<style scoped>
+.copy-link {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

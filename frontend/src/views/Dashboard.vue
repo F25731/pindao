@@ -39,17 +39,39 @@
       </div>
       <n-empty v-else description="暂无数据" />
     </n-card>
+
+    <n-card title="系统实时详情日志" style="margin-top: 24px;">
+      <template #header-extra>
+        <n-space align="center">
+          <n-tag size="small" type="success">自动刷新</n-tag>
+          <n-button size="small" :loading="logsLoading" @click="loadLogs">刷新日志</n-button>
+        </n-space>
+      </template>
+      <div ref="logBox" class="log-console">
+        <div v-for="log in systemLogs" :key="log.id" class="log-line">
+          <span class="log-time">{{ formatTime(log.created_at) }}</span>
+          <span :class="['log-level', `log-${log.level}`]">{{ log.level.toUpperCase() }}</span>
+          <span class="log-source">{{ log.source }}</span>
+          <span class="log-message">{{ log.message }}</span>
+        </div>
+        <n-empty v-if="!systemLogs.length" description="暂无日志" />
+      </div>
+    </n-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { NButton, NGrid, NGi, NCard, NStatistic, NEmpty, NSpace, NDataTable } from 'naive-ui'
+import { ref, onMounted, computed, nextTick, onUnmounted, watch } from 'vue'
+import { NButton, NGrid, NGi, NCard, NStatistic, NEmpty, NSpace, NDataTable, NTag } from 'naive-ui'
 import { api } from '../api/client'
 
 const overview = ref<Record<string, number>>({})
 const dailyStats = ref<Array<{ date: string; transferred: number; pushed: number }>>([])
+const systemLogs = ref<any[]>([])
 const loading = ref(false)
+const logsLoading = ref(false)
+const logBox = ref<HTMLElement | null>(null)
+let logTimer: number | undefined
 
 const statCards = computed(() => [
   { label: '总资源数', value: overview.value['总资源数'] || 0 },
@@ -115,5 +137,85 @@ async function loadData() {
   }
 }
 
-onMounted(loadData)
+async function loadLogs() {
+  logsLoading.value = true
+  try {
+    const res = await api.get('/api/stats/logs', { params: { limit: 160 } })
+    systemLogs.value = res.data || []
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+function formatTime(value: string) {
+  return value?.slice(5, 19).replace('T', ' ') || '-'
+}
+
+watch(systemLogs, async () => {
+  await nextTick()
+  if (logBox.value) {
+    logBox.value.scrollTop = logBox.value.scrollHeight
+  }
+})
+
+onMounted(() => {
+  loadData()
+  loadLogs()
+  logTimer = window.setInterval(loadLogs, 3000)
+})
+
+onUnmounted(() => {
+  if (logTimer) window.clearInterval(logTimer)
+})
 </script>
+
+<style scoped>
+.log-console {
+  height: 320px;
+  overflow-y: auto;
+  padding: 12px;
+  border-radius: 6px;
+  background: #111827;
+  color: #d1d5db;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 88px 64px 86px 1fr;
+  gap: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-time {
+  color: #9ca3af;
+}
+
+.log-level {
+  font-weight: 700;
+}
+
+.log-info,
+.log-success {
+  color: #34d399;
+}
+
+.log-warning {
+  color: #fbbf24;
+}
+
+.log-error {
+  color: #f87171;
+}
+
+.log-source {
+  color: #93c5fd;
+}
+
+.log-message {
+  color: #e5e7eb;
+}
+</style>

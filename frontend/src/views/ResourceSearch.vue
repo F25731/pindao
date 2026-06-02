@@ -38,9 +38,10 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { NButton, NDataTable, NInput, NPagination, NSelect, NSpace } from 'naive-ui'
+import { NButton, NDataTable, NInput, NPagination, NSelect, NSpace, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
+const message = useMessage()
 const resources = ref<any[]>([])
 const loading = ref(false)
 const page = ref(1)
@@ -68,21 +69,35 @@ const columns = [
     title: '源链接',
     key: 'original_link',
     minWidth: 280,
-    ellipsis: { tooltip: true },
-    render: (row: any) => renderLink(row.original_link),
+    render: (row: any) => renderCopyText(row.original_link),
   },
   {
     title: '我的分享链接',
     key: 'new_share_link',
     minWidth: 280,
-    ellipsis: { tooltip: true },
-    render: (row: any) => renderLink(row.new_share_link),
+    render: (row: any) => renderCopyText(row.new_share_link),
   },
 ]
 
-function renderLink(link?: string) {
-  if (!link) return '-'
-  return h('a', { href: link, target: '_blank', rel: 'noopener noreferrer' }, link)
+async function copyText(text?: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制链接')
+  } catch {
+    const input = document.createElement('textarea')
+    input.value = text
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    message.success('已复制链接')
+  }
+}
+
+function renderCopyText(text?: string) {
+  if (!text) return '-'
+  return h('button', { class: 'copy-link', onClick: () => copyText(text), title: '点击复制' }, text)
 }
 
 function searchResources() {
@@ -106,3 +121,18 @@ async function loadData() {
 
 onMounted(loadData)
 </script>
+
+<style scoped>
+.copy-link {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

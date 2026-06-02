@@ -79,8 +79,8 @@ const columns = [
     title: '状态', key: 'status', width: 130,
     render: (row: any) => h(NTag, { type: (statusColorMap[row.status] || 'default') as any, size: 'small' }, () => row.status)
   },
-  { title: '源链接', key: 'original_link', width: 220, ellipsis: { tooltip: true } },
-  { title: '新链接', key: 'new_share_link', width: 220, ellipsis: { tooltip: true } },
+  { title: '源链接', key: 'original_link', width: 220, render: (row: any) => renderCopyText(row.original_link) },
+  { title: '新链接', key: 'new_share_link', width: 220, render: (row: any) => renderCopyText(row.new_share_link) },
   { title: '错误', key: 'error_message', width: 150, ellipsis: { tooltip: true } },
   { title: '重试', key: 'retry_count', width: 50 },
   { title: '创建时间', key: 'created_at', width: 160, render: (row: any) => row.created_at?.slice(0, 19).replace('T', ' ') },
@@ -129,5 +129,41 @@ async function deleteSelected() {
   }
 }
 
+async function copyText(text?: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制链接')
+  } catch {
+    const input = document.createElement('textarea')
+    input.value = text
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    message.success('已复制链接')
+  }
+}
+
+function renderCopyText(text?: string) {
+  if (!text) return '-'
+  return h('button', { class: 'copy-link', onClick: () => copyText(text), title: '点击复制' }, text)
+}
+
 onMounted(loadData)
 </script>
+
+<style scoped>
+.copy-link {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

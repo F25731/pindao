@@ -1,13 +1,25 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
+from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import AdminUser, Resource, GuangyaAccount, Task
+from app.models import AdminUser, Resource, GuangyaAccount, Task, SystemLog
 
 router = APIRouter()
+
+
+class SystemLogOut(BaseModel):
+    id: int
+    level: str
+    source: str
+    message: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 @router.get("/overview")
@@ -94,3 +106,19 @@ async def daily_stats(
         })
 
     return result
+
+
+@router.get("/logs", response_model=list[SystemLogOut])
+async def system_logs(
+    limit: int = 120,
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    limit = max(20, min(limit, 300))
+    result = await db.execute(
+        select(SystemLog)
+        .order_by(SystemLog.created_at.desc(), SystemLog.id.desc())
+        .limit(limit)
+    )
+    logs = list(reversed(result.scalars().all()))
+    return logs

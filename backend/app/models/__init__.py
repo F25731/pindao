@@ -6,6 +6,7 @@ from .resource import Resource
 from .task import Task
 from .duplicate_review import DuplicateReview
 from .api_key import TelegramPushRecord, ApiKey, AuditLog
+from .system_log import SystemLog
 
 __all__ = [
     "Base",
@@ -20,4 +21,5 @@ __all__ = [
     "TelegramPushRecord",
     "ApiKey",
     "AuditLog",
+    "SystemLog",
 ]

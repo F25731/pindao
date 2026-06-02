@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, h } from 'vue'
 import { NGrid, NGi, NCard, NStatistic, NDataTable, NButton, NSpace, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
@@ -47,7 +47,7 @@ const columns = [
   { title: 'ID', key: 'id', width: 60 },
   { title: '名称', key: 'name', ellipsis: { tooltip: true } },
   { title: '标签', key: 'tags', width: 120, ellipsis: { tooltip: true } },
-  { title: '新链接', key: 'new_share_link', width: 250, ellipsis: { tooltip: true } },
+  { title: '新链接', key: 'new_share_link', width: 250, render: (row: any) => renderCopyText(row.new_share_link) },
   { title: '转存时间', key: 'transferred_at', width: 160, render: (row: any) => row.transferred_at?.slice(0, 19).replace('T', ' ') || '-' },
 ]
 
@@ -129,5 +129,41 @@ async function requeueAllSent() {
   }
 }
 
+async function copyText(text?: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制链接')
+  } catch {
+    const input = document.createElement('textarea')
+    input.value = text
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    message.success('已复制链接')
+  }
+}
+
+function renderCopyText(text?: string) {
+  if (!text) return '-'
+  return h('button', { class: 'copy-link', onClick: () => copyText(text), title: '点击复制' }, text)
+}
+
 onMounted(loadData)
 </script>
+
+<style scoped>
+.copy-link {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

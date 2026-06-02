@@ -15,6 +15,7 @@ from app.models import Base, Task, Resource, GuangyaAccount
 from app.services.import_service import process_next_import_batch
 from app.services.schema_service import ensure_runtime_database
 from app.services.system_control import is_worker_paused
+from app.services.system_log import append_system_log
 from app.worker.transfer_handler import execute_transfer
 
 logging.basicConfig(
@@ -38,6 +39,12 @@ async def recover_interrupted_tasks():
         for task in tasks:
             task.status = "failed_retryable"
             task.error_message = "任务超时，Worker 重启后恢复"
+            await append_system_log(
+                db,
+                "warning",
+                "worker",
+                f"恢复超时任务: task_id={task.id}, resource_id={task.resource_id}",
+            )
             logger.warning(f"恢复超时任务: task_id={task.id}, resource_id={task.resource_id}")
         if tasks:
             await db.commit()
@@ -144,6 +151,8 @@ async def worker_loop():
 
                 imported = await process_next_import_batch(db, limit=500)
                 if imported:
+                    await append_system_log(db, "info", "import", f"导入管道处理 {imported} 行")
+                    await db.commit()
                     logger.info(f"导入管道处理 {imported} 行")
 
                 running = await get_running_count(db)
@@ -174,6 +183,9 @@ async def worker_loop():
                     continue
 
                 await db.commit()
+                async with async_session() as log_db:
+                    await append_system_log(log_db, "info", "worker", f"开始处理任务: task_ids={task_ids}")
+                    await log_db.commit()
                 logger.info(f"开始处理任务: task_ids={task_ids}")
 
             # 在后台执行，允许主循环继续拾取下一个任务
@@ -183,6 +195,12 @@ async def worker_loop():
 
         except Exception as e:
             logger.error(f"Worker 循环异常: {e}")
+            try:
+                async with async_session() as log_db:
+                    await append_system_log(log_db, "error", "worker", f"Worker 循环异常: {str(e)[:500]}")
+                    await log_db.commit()
+            except Exception:
+                pass
             await asyncio.sleep(settings.worker_poll_interval)
 
 
@@ -191,6 +209,9 @@ async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await ensure_runtime_database(conn)
+    async with async_session() as db:
+        await append_system_log(db, "info", "worker", "光鸭资源转存 Worker 启动")
+        await db.commit()
     await worker_loop()
 
 
