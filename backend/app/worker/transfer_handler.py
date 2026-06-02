@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from secrets import token_hex
 from typing import Optional
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, select
@@ -256,8 +257,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
                 return
 
+            new_share_url = _extract_share_url(share_resp)
             new_share_id = _extract_new_share_id(share_resp)
             actual_code = _extract_share_code(share_resp) or new_code
+            if new_share_url:
+                url_share_id, url_code = _parse_built_share_link(new_share_url)
+                new_share_id = url_share_id or new_share_id
+                actual_code = url_code or actual_code
             if not new_share_id or actual_code != new_code:
                 # 尝试从分享列表获取
                 try:
@@ -266,6 +272,7 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                     if share_info:
                         new_share_id = share_info.get("share_id") or new_share_id
                         actual_code = share_info.get("code") or actual_code
+                        new_share_url = share_info.get("url") or new_share_url
                     checkpoint["share_list_resp"] = list_resp
                 except Exception:
                     pass
@@ -283,7 +290,7 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 )
                 return
 
-            new_link = build_share_link(new_share_id, actual_code)
+            new_link = _normalize_share_url(new_share_url, actual_code) if new_share_url else build_share_link(new_share_id, actual_code)
             checkpoint["new_share_id"] = new_share_id
             checkpoint["new_extract_code"] = actual_code
             checkpoint["new_share_link"] = new_link
@@ -433,12 +440,8 @@ def _looks_like_target_file_ids(restored_ids: list, source_ids: list) -> bool:
 def _extract_new_share_id(resp: dict) -> Optional[str]:
     candidates = _collect_values(
         resp,
-        ("publicShareId", "public_share_id", "shareId", "share_id", "sid", "id", "url", "shareUrl", "shareLink"),
+        ("publicShareId", "public_share_id", "shareId", "share_id", "sid", "url", "shareUrl", "shareLink", "link"),
     )
-    for val in candidates:
-        sid = _normalize_share_id(val)
-        if sid and "_" in sid:
-            return sid
     for val in candidates:
         sid = _normalize_share_id(val)
         if sid:
@@ -447,7 +450,7 @@ def _extract_new_share_id(resp: dict) -> Optional[str]:
 
 
 def _extract_share_code(resp: dict) -> Optional[str]:
-    candidates = _collect_values(
+    candidates = _collect_share_codes(
         resp,
         ("code", "extractCode", "extract_code", "shareCode", "share_code", "pwd", "password"),
     )
@@ -458,10 +461,27 @@ def _extract_share_code(resp: dict) -> Optional[str]:
     return None
 
 
+def _extract_share_url(resp: dict) -> Optional[str]:
+    candidates = _collect_values(resp, ("url", "shareUrl", "shareLink", "link"))
+    for val in candidates:
+        url = _normalize_share_url(str(val), None)
+        if url:
+            return url
+    return None
+
+
 def _extract_share_info(item: dict) -> dict:
+    url = _extract_share_url(item)
+    share_id = _extract_new_share_id(item)
+    code = _extract_share_code(item)
+    if url:
+        url_share_id, url_code = _parse_built_share_link(url)
+        share_id = url_share_id or share_id
+        code = url_code or code
     return {
-        "share_id": _extract_new_share_id(item),
-        "code": _extract_share_code(item),
+        "share_id": share_id,
+        "code": code,
+        "url": url,
         "title": item.get("title") or item.get("name") or item.get("fileName"),
     }
 
@@ -562,6 +582,23 @@ def _collect_values(value, keys: tuple[str, ...]) -> list:
     return found
 
 
+def _collect_share_codes(value, keys: tuple[str, ...]) -> list:
+    found = []
+    if isinstance(value, dict):
+        looks_like_api_envelope = "data" in value and ("msg" in value or "message" in value)
+        for key, item in value.items():
+            if key in keys and item:
+                if key == "code" and looks_like_api_envelope:
+                    pass
+                else:
+                    found.append(item)
+            found.extend(_collect_share_codes(item, keys))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_collect_share_codes(item, keys))
+    return found
+
+
 def _dedupe_ids(values: list) -> list:
     ids = []
     seen = set()
@@ -581,7 +618,12 @@ def _normalize_share_id(value) -> Optional[str]:
         return None
     match = re.search(r"/s/([^/?#]+)", text)
     if match:
-        return match.group(1)
+        text = match.group(1)
+    text = text.split("?", 1)[0].split("#", 1)[0].strip()
+    if not re.match(r"^[A-Za-z0-9_-]+$", text):
+        return None
+    if "_" not in text:
+        return None
     return text
 
 
@@ -592,9 +634,53 @@ def _normalize_share_code(value) -> Optional[str]:
     match = re.search(r"[?&]code=([^&#]+)", text)
     if match:
         return match.group(1)
-    if len(text) <= 16 and re.match(r"^[A-Za-z0-9_-]+$", text):
+    if text in ("0", "200") or text.isdigit():
+        return None
+    if 4 <= len(text) <= 16 and re.match(r"^[A-Za-z0-9_-]+$", text):
         return text
     return None
+
+
+def _parse_built_share_link(url: str) -> tuple[Optional[str], Optional[str]]:
+    normalized = _normalize_share_url(url, None)
+    if not normalized:
+        return None, None
+    parsed = urlparse(normalized.split("#", 1)[0])
+    match = re.search(r"/s/([^/?#]+)", parsed.path)
+    share_id = _normalize_share_id(match.group(1)) if match else None
+    code = parse_qs(parsed.query).get("code", [None])[0]
+    return share_id, _normalize_share_code(code)
+
+
+def _normalize_share_url(url: Optional[str], code: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    text = str(url).strip()
+    if not text:
+        return None
+    if text.startswith("//"):
+        text = "https:" + text
+    elif text.startswith("/s/"):
+        text = "https://www.guangyapan.com" + text
+    elif text.startswith("www.guangyapan.com"):
+        text = "https://" + text
+
+    if "guangyapan.com/s/" not in text:
+        share_id = _normalize_share_id(text)
+        if not share_id:
+            return None
+        return build_share_link(share_id, code or "")
+
+    parsed = urlparse(text)
+    match = re.search(r"/s/([^/?#]+)", parsed.path)
+    share_id = _normalize_share_id(match.group(1)) if match else None
+    if not share_id:
+        return None
+
+    query = parse_qs(parsed.query)
+    normalized_code = _normalize_share_code(code) or _normalize_share_code(query.get("code", [None])[0])
+    new_query = urlencode({"code": normalized_code}) if normalized_code else ""
+    return urlunparse(("https", "www.guangyapan.com", f"/s/{share_id}", "", new_query, ""))
 
 
 def _has_api_error(resp: dict) -> bool:

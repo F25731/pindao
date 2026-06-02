@@ -1,6 +1,6 @@
 import re
 from typing import Optional, Tuple
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlencode, urlparse, parse_qs
 
 
 def parse_share_link(link: str) -> Tuple[Optional[str], Optional[str]]:
@@ -41,7 +41,7 @@ def parse_share_link(link: str) -> Tuple[Optional[str], Optional[str]]:
             return None, None
 
     # 尝试匹配纯 share_id 格式: 数字_字母数字
-    match = re.match(r"^(\d+_[A-Za-z0-9]+)$", link)
+    match = re.match(r"^([A-Za-z0-9_-]+)$", link)
     if match:
         return match.group(1), ""
 
@@ -52,7 +52,7 @@ def build_share_link(share_id: str, code: str = "") -> str:
     """根据 share_id 和 code 生成官方格式分享链接。"""
     url = f"https://www.guangyapan.com/s/{share_id}"
     if code:
-        url += f"?code={code}"
+        url += "?" + urlencode({"code": code})
     return url
 
 
