@@ -167,6 +167,7 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 return
 
             checkpoint["file_ids"] = file_ids
+            checkpoint["source_file_items"] = _compact_file_items(files_resp)
             task.checkpoint = checkpoint
             await db.commit()
 
@@ -174,6 +175,21 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             return
 
         # STEP 4: 转存到自己账号
+        if "source_file_items" not in checkpoint and checkpoint.get("share_access_token"):
+            try:
+                files_resp = await GuangyaClient.share_files_list(
+                    access_token=checkpoint["share_access_token"]
+                )
+                if not _has_api_error(files_resp):
+                    source_file_ids = _extract_file_ids(files_resp)
+                    if source_file_ids:
+                        checkpoint["file_ids"] = source_file_ids
+                    checkpoint["source_file_items"] = _compact_file_items(files_resp)
+                    task.checkpoint = checkpoint
+                    await db.commit()
+            except Exception:
+                pass
+
         if "restore_done" not in checkpoint:
             if "target_existing_file_ids" not in checkpoint:
                 try:
@@ -214,17 +230,13 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             source_file_ids = checkpoint.get("file_ids") or []
             try:
                 file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
-                new_file_ids = _find_new_file_ids_from_list(
+                located_file_ids = _locate_transferred_file_ids(
                     file_list_resp,
-                    checkpoint.get("target_existing_file_ids") or [],
+                    checkpoint,
                     resource.name,
                 )
-                if new_file_ids and _looks_like_target_file_ids(new_file_ids, source_file_ids):
-                    transferred_file_ids = new_file_ids
-                elif not transferred_file_ids:
-                    matched_file_ids = _find_file_ids_from_list(file_list_resp, resource.name)
-                    if _looks_like_target_file_ids(matched_file_ids, source_file_ids):
-                        transferred_file_ids = matched_file_ids
+                if located_file_ids:
+                    transferred_file_ids = located_file_ids
                 checkpoint["file_list_resp"] = file_list_resp
             except Exception:
                 pass
@@ -241,12 +253,27 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
             # 获取转存后的文件 ID
             transferred_file_ids = checkpoint.get("transferred_file_ids")
             if not transferred_file_ids:
+                try:
+                    file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
+                    transferred_file_ids = _locate_transferred_file_ids(file_list_resp, checkpoint, resource.name)
+                    checkpoint["file_list_resp"] = file_list_resp
+                    if transferred_file_ids:
+                        checkpoint["transferred_file_ids"] = transferred_file_ids
+                        task.checkpoint = checkpoint
+                        await db.commit()
+                except Exception:
+                    pass
+
+            if not transferred_file_ids:
                 await _fail_retryable(
                     db,
                     task,
                     resource,
-                    _format_api_error("转存成功但无法获取新文件ID", checkpoint.get("restore_resp")),
-                    checkpoint.get("restore_resp"),
+                    "转存成功但无法定位新文件ID：已保存接口响应，稍后重试定位；若持续出现，请检查账号目录是否已有同名文件",
+                    {
+                        "restore_resp": checkpoint.get("restore_resp"),
+                        "source_file_items": checkpoint.get("source_file_items"),
+                    },
                     retry_minutes=2,
                 )
                 return
@@ -573,13 +600,95 @@ def _extract_file_items(resp: dict) -> list:
     return data.get("list") or data.get("files") or data.get("fileList") or []
 
 
+def _compact_file_items(resp: dict) -> list:
+    compacted = []
+    for item in _extract_file_items(resp):
+        file_id = _file_item_id(item)
+        name = _file_item_name(item)
+        compacted.append({
+            "id": file_id,
+            "name": name,
+            "size": item.get("size") or item.get("fileSize"),
+            "type": item.get("type") or item.get("fileType"),
+        })
+    return compacted
+
+
 def _file_item_id(item: dict) -> Optional[str]:
     file_id = item.get("id") or item.get("fileId") or item.get("fileID") or item.get("resId")
     return str(file_id) if file_id else None
 
 
+def _file_item_name(item: dict) -> str:
+    return str(
+        item.get("name")
+        or item.get("fileName")
+        or item.get("title")
+        or ""
+    ).strip()
+
+
 def _extract_file_ids_from_file_list(resp: dict) -> list:
     return _dedupe_ids([_file_item_id(item) for item in _extract_file_items(resp)])
+
+
+def _locate_transferred_file_ids(resp: dict, checkpoint: dict, resource_name: str) -> list:
+    source_file_ids = checkpoint.get("file_ids") or []
+    source_count = max(len(source_file_ids), 1)
+    existing_ids = checkpoint.get("target_existing_file_ids") or []
+    files = _extract_file_items(resp)
+    if not files:
+        return []
+
+    new_items = _find_new_file_items(files, existing_ids)
+    candidates = _match_file_items_by_names(new_items, _source_names(checkpoint, resource_name))
+    if _looks_like_target_file_ids(candidates, source_file_ids):
+        return candidates
+
+    if len(new_items) == source_count:
+        new_ids = _dedupe_ids([_file_item_id(item) for item in new_items])
+        if _looks_like_target_file_ids(new_ids, source_file_ids):
+            return new_ids
+
+    candidates = _match_file_items_by_names(files, _source_names(checkpoint, resource_name))
+    if _looks_like_target_file_ids(candidates, source_file_ids):
+        return candidates
+
+    return []
+
+
+def _find_new_file_items(files: list, existing_ids: list) -> list:
+    existing = {str(file_id) for file_id in existing_ids if file_id}
+    new_items = []
+    for item in files:
+        file_id = _file_item_id(item)
+        if file_id and file_id not in existing:
+            new_items.append(item)
+    return new_items
+
+
+def _source_names(checkpoint: dict, resource_name: str) -> list:
+    names = []
+    for item in checkpoint.get("source_file_items") or []:
+        name = str(item.get("name") or "").strip()
+        if name:
+            names.append(name)
+    if resource_name:
+        names.append(str(resource_name).strip())
+    return _dedupe_ids(names)
+
+
+def _match_file_items_by_names(items: list, names: list) -> list:
+    wanted = {name for name in names if name}
+    if not wanted:
+        return []
+    matched = []
+    for item in items:
+        if _file_item_name(item) in wanted:
+            file_id = _file_item_id(item)
+            if file_id:
+                matched.append(file_id)
+    return _dedupe_ids(matched)
 
 
 def _find_new_file_ids_from_list(resp: dict, existing_ids: list, title: str) -> list:
