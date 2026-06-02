@@ -744,7 +744,7 @@ async def _fail_retryable(
 
 async def _fail_final(
     db: AsyncSession, task: Task, resource: Resource,
-    message: str, resp: dict = None,
+    message: str, resp: dict = None, pause_following: bool = False,
 ):
     task.status = "failed_final"
     task.error_message = message
@@ -753,7 +753,7 @@ async def _fail_final(
     resource.status = "最终失败"
     resource.error_message = message
     resource.error_response = resp
-    paused_count = await _pause_following_transfer_tasks(db, task.id, message)
+    paused_count = await _pause_following_transfer_tasks(db, task.id, message) if pause_following else 0
     await db.commit()
     logger.error(f"任务最终失败: task_id={task.id}, paused_following={paused_count}, msg={message}")
 
