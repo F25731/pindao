@@ -10,7 +10,7 @@ from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update, func
 import httpx
 
 from app.models import Task, Resource, GuangyaAccount
@@ -211,6 +211,7 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                 if _looks_like_target_file_ids(restored_response_file_ids, checkpoint.get("file_ids") or [])
                 else []
             )
+            source_file_ids = checkpoint.get("file_ids") or []
             try:
                 file_list_resp = await client.get_file_list(parent_id=account.default_parent_id or "", page=0)
                 new_file_ids = _find_new_file_ids_from_list(
@@ -218,10 +219,12 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                     checkpoint.get("target_existing_file_ids") or [],
                     resource.name,
                 )
-                if new_file_ids:
+                if new_file_ids and _looks_like_target_file_ids(new_file_ids, source_file_ids):
                     transferred_file_ids = new_file_ids
                 elif not transferred_file_ids:
-                    transferred_file_ids = _find_file_ids_from_list(file_list_resp, resource.name)
+                    matched_file_ids = _find_file_ids_from_list(file_list_resp, resource.name)
+                    if _looks_like_target_file_ids(matched_file_ids, source_file_ids):
+                        transferred_file_ids = matched_file_ids
                 checkpoint["file_list_resp"] = file_list_resp
             except Exception:
                 pass
@@ -244,6 +247,26 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
                     resource,
                     _format_api_error("转存成功但无法获取新文件ID", checkpoint.get("restore_resp")),
                     checkpoint.get("restore_resp"),
+                    retry_minutes=2,
+                )
+                return
+
+            source_file_ids = checkpoint.get("file_ids") or []
+            if not _looks_like_target_file_ids(transferred_file_ids, source_file_ids):
+                bad_count = len(transferred_file_ids)
+                source_count = max(len(source_file_ids), 1)
+                checkpoint.pop("transferred_file_ids", None)
+                checkpoint.pop("target_existing_file_ids", None)
+                checkpoint.pop("restore_done", None)
+                checkpoint.pop("restore_resp", None)
+                checkpoint.pop("file_list_resp", None)
+                task.checkpoint = checkpoint
+                await _fail_retryable(
+                    db,
+                    task,
+                    resource,
+                    f"转存后的文件ID数量异常：源分享 {source_count} 个文件，系统定位到 {bad_count} 个，已重置定位步骤避免创建错误分享",
+                    {"source_file_ids": source_file_ids, "bad_transferred_file_ids": transferred_file_ids[:50]},
                     retry_minutes=2,
                 )
                 return
@@ -458,6 +481,10 @@ def _extract_restored_file_ids(resp: dict) -> list:
 
 def _looks_like_target_file_ids(restored_ids: list, source_ids: list) -> bool:
     if not restored_ids:
+        return False
+    restored = {str(file_id) for file_id in restored_ids if file_id}
+    source = {str(file_id) for file_id in source_ids if file_id}
+    if source and restored and restored.issubset(source):
         return False
     source_count = max(len(source_ids), 1)
     return len(restored_ids) <= source_count
@@ -789,34 +816,42 @@ async def _pause_following_transfer_tasks(
     failed_task_id: int,
     reason: str,
 ) -> int:
-    result = await db.execute(
-        select(Task).where(
+    pending_tasks = (
+        select(Task.id, Task.resource_id)
+        .where(
             Task.id != failed_task_id,
             Task.task_type == "transfer",
             Task.status.in_(("pending", "failed_retryable")),
         )
+        .subquery()
     )
-    tasks = result.scalars().all()
-    if not tasks:
+
+    count_result = await db.execute(select(func.count()).select_from(pending_tasks))
+    task_count = count_result.scalar() or 0
+    if task_count <= 0:
         return 0
 
-    resource_ids = [task.resource_id for task in tasks]
-    resources = {}
-    if resource_ids:
-        res_result = await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
-        resources = {resource.id: resource for resource in res_result.scalars().all()}
-
     message = f"前序资源最终失败，队列已自动暂停，请检查后手动继续：{reason[:200]}"
-    for queued_task in tasks:
-        queued_task.status = "paused"
-        queued_task.next_retry_at = None
-        if not queued_task.error_message:
-            queued_task.error_message = message
-        queued_resource = resources.get(queued_task.resource_id)
-        if queued_resource and queued_resource.status in ("待转存", "失败待重试"):
-            queued_resource.status = "转存暂停"
-            queued_resource.error_message = message
-    return len(tasks)
+    await db.execute(
+        update(Resource)
+        .where(
+            Resource.id.in_(select(pending_tasks.c.resource_id)),
+            Resource.status.in_(("待转存", "失败待重试")),
+        )
+        .values(status="转存暂停", error_message=message)
+        .execution_options(synchronize_session=False)
+    )
+    await db.execute(
+        update(Task)
+        .where(Task.id.in_(select(pending_tasks.c.id)))
+        .values(
+            status="paused",
+            next_retry_at=None,
+            error_message=func.coalesce(Task.error_message, message),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return task_count
 
 
 async def _pause_until_account_available(

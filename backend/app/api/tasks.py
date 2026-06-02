@@ -11,6 +11,7 @@ from app.models import AdminUser, GuangyaAccount, Resource, Task
 from app.services.delete_service import delete_resources_permanently
 
 router = APIRouter()
+QUERY_CHUNK_SIZE = 1000
 
 ACCOUNT_BLOCKED_KEYWORDS = (
     "没有可用账号",
@@ -275,14 +276,22 @@ def _is_account_blocked_task(task: Task, resource: Resource | None) -> bool:
 async def _load_tasks_with_resources(db: AsyncSession, task_ids: List[int]):
     if not task_ids:
         raise HTTPException(status_code=400, detail="请选择任务")
-    result = await db.execute(select(Task).where(Task.id.in_(task_ids)))
-    tasks = result.scalars().all()
+    tasks = []
+    for chunk in _chunks(list(dict.fromkeys(task_ids)), QUERY_CHUNK_SIZE):
+        result = await db.execute(select(Task).where(Task.id.in_(chunk)))
+        tasks.extend(result.scalars().all())
+
     resource_ids = [task.resource_id for task in tasks]
     resources = {}
-    if resource_ids:
-        res_result = await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
-        resources = {resource.id: resource for resource in res_result.scalars().all()}
+    for chunk in _chunks(list(dict.fromkeys(resource_ids)), QUERY_CHUNK_SIZE):
+        res_result = await db.execute(select(Resource).where(Resource.id.in_(chunk)))
+        resources.update({resource.id: resource for resource in res_result.scalars().all()})
     return tasks, resources
+
+
+def _chunks(values: List[int], size: int):
+    for i in range(0, len(values), size):
+        yield values[i:i + size]
 
 
 @router.post("/resume-account-blocked")
@@ -476,8 +485,8 @@ async def batch_delete_tasks(
         await db.commit()
         return {"ok": True, **deleted}
 
-    if task_ids:
-        await db.execute(delete(Task).where(Task.id.in_(task_ids)))
+    for chunk in _chunks(task_ids, QUERY_CHUNK_SIZE):
+        await db.execute(delete(Task).where(Task.id.in_(chunk)))
 
     await db.commit()
     return {
