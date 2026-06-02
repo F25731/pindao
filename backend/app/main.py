@@ -6,7 +6,7 @@ from app.config import settings
 from app.database import engine
 from app.models import Base
 from app.api.router import api_router
-from app.services.schema_service import ensure_runtime_indexes, ensure_runtime_schema
+from app.services.schema_service import ensure_runtime_database
 
 
 @asynccontextmanager
@@ -16,8 +16,7 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await ensure_runtime_schema(conn)
-        await ensure_runtime_indexes(conn)
+        await ensure_runtime_database(conn)
 
     async with async_session() as session:
         await ensure_admin_exists(session)

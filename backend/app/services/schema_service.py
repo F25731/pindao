@@ -1,6 +1,12 @@
 from sqlalchemy import text
 
 
+async def ensure_runtime_database(conn):
+    await conn.execute(text("SELECT pg_advisory_xact_lock(2026060201)"))
+    await ensure_runtime_schema(conn)
+    await ensure_runtime_indexes(conn)
+
+
 async def ensure_runtime_schema(conn):
     statements = [
         # api_keys was added after early deployments; create_all does not alter old tables.
