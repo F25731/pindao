@@ -9,6 +9,7 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AdminUser, GuangyaAccount, Resource, Task
 from app.services.delete_service import delete_resources_permanently
+from app.services.system_control import set_worker_control
 
 router = APIRouter()
 QUERY_CHUNK_SIZE = 1000
@@ -331,6 +332,35 @@ async def resume_account_blocked_tasks(
         "skipped": skipped,
         "available_accounts": available_accounts,
     }
+
+
+@router.post("/start-all")
+async def start_all_tasks(
+    db: AsyncSession = Depends(get_db),
+    user: AdminUser = Depends(get_current_user),
+):
+    await set_worker_control(db, paused=False, reason="一键全部开始")
+
+    result = await db.execute(
+        select(Task, Resource)
+        .join(Resource, Task.resource_id == Resource.id, isouter=True)
+        .where(
+            Task.task_type == "transfer",
+            Task.status.in_(("paused", "pause_requested", "failed_retryable", "failed_final", "skipped", "pending")),
+        )
+        .order_by(Task.created_at.asc())
+    )
+
+    updated = 0
+    for task, resource in result.all():
+        if task.status in ("failed_retryable", "failed_final"):
+            _set_task_retry(task, resource)
+        else:
+            _set_task_started(task, resource)
+        updated += 1
+
+    await db.commit()
+    return {"ok": True, "updated": updated, "worker_paused": False}
 
 
 @router.post("/{task_id}/cancel")

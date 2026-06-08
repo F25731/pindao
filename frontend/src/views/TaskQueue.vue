@@ -12,6 +12,7 @@
       <n-button size="small" type="primary" :loading="resumingAccountBlocked" @click="resumeAccountBlocked">账号满后一键继续</n-button>
       <n-button size="small" type="warning" :disabled="!selectedIds.length" @click="batchAction('pause')">批量暂停</n-button>
       <n-button size="small" type="primary" :disabled="!selectedIds.length" @click="batchAction('start')">批量开始</n-button>
+      <n-button size="small" type="primary" secondary :loading="startingAll" :disabled="!startableCount" @click="startAllTasks">一键全部开始</n-button>
       <n-button size="small" :disabled="!selectedIds.length" @click="batchAction('retry')">批量重试</n-button>
       <n-button size="small" type="error" :disabled="!selectedIds.length" @click="batchAction('cancel')">批量取消</n-button>
       <n-button size="small" type="error" :disabled="!selectedIds.length" ghost @click="deleteSelected('task_only')">只删任务</n-button>
@@ -47,8 +48,19 @@ const pageSize = 20
 const queueStatus = ref<Record<string, number>>({})
 const selectedIds = ref<number[]>([])
 const resumingAccountBlocked = ref(false)
+const startingAll = ref(false)
 
 const pageCount = computed(() => Math.ceil(total.value / pageSize))
+const startableCount = computed(() => {
+  return [
+    'pending',
+    'paused',
+    'pause_requested',
+    'failed_retryable',
+    'failed_final',
+    'skipped',
+  ].reduce((sum, status) => sum + (queueStatus.value[status] || 0), 0)
+})
 
 const statusColorMap: Record<string, string> = {
   pending: 'default',
@@ -123,6 +135,21 @@ async function resumeAccountBlocked() {
     message.error(e.response?.data?.detail || '恢复失败')
   } finally {
     resumingAccountBlocked.value = false
+  }
+}
+
+async function startAllTasks() {
+  if (!window.confirm(`确定开始全部可启动任务？当前约 ${startableCount.value} 个任务会进入队列。`)) return
+  startingAll.value = true
+  try {
+    const res = await api.post('/api/tasks/start-all')
+    message.success(`已开始 ${res.data.updated || 0} 个任务`)
+    selectedIds.value = []
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '一键全部开始失败')
+  } finally {
+    startingAll.value = false
   }
 }
 
