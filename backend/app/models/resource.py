@@ -19,6 +19,7 @@ class Resource(TimestampMixin, Base):
     original_link: Mapped[str] = mapped_column(Text, nullable=False)
     share_id: Mapped[Optional[str]] = mapped_column(String(128))
     extract_code: Mapped[Optional[str]] = mapped_column(String(64))
+    search_text: Mapped[Optional[str]] = mapped_column(Text)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="待转存")
 

@@ -1,21 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from pydantic import BaseModel
-from typing import Optional, List
+from __future__ import annotations
+
+import base64
+import json
 from datetime import datetime, timezone, timedelta
+from typing import Optional, Sequence
+
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from pydantic import BaseModel
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Resource, ApiKey, TelegramPushRecord
+from app.models import ApiKey, Resource, TelegramPushRecord
+from app.utils.link_parser import parse_share_link
 from app.utils.security import hash_api_key
+from app.utils.search_index import normalize_search_keyword
 
 router = APIRouter()
 
 
-async def verify_api_key(
+async def _load_api_key(
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: AsyncSession = Depends(get_db),
-):
+) -> ApiKey:
     key_hash = hash_api_key(x_api_key)
     result = await db.execute(
         select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.is_active == True)
@@ -28,6 +35,23 @@ async def verify_api_key(
     api_key.last_used_at = datetime.now(timezone.utc)
     await db.commit()
     return api_key
+
+
+def require_api_key(required_permissions: Optional[Sequence[str]] = None):
+    required = tuple(required_permissions or ())
+
+    async def dependency(api_key: ApiKey = Depends(_load_api_key)) -> ApiKey:
+        if required:
+            permissions = set(api_key.permissions or [])
+            missing = [permission for permission in required if permission not in permissions]
+            if missing:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"API 密钥缺少权限: {', '.join(missing)}",
+                )
+        return api_key
+
+    return dependency
 
 
 class PushItem(BaseModel):
@@ -48,13 +72,32 @@ class CallbackRequest(BaseModel):
     response_payload: Optional[dict] = None
 
 
+class SearchItem(BaseModel):
+    id: int
+    name: str
+    tags: Optional[str]
+    link: str
+
+
+class SearchDetail(SearchItem):
+    extract_code: Optional[str] = None
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchItem]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
 def build_push_text(resource: Resource) -> str:
     link = resource.new_share_link or resource.original_link
-    return "\n".join([
-        f"名称：{resource.name}",
-        f"标签：{resource.tags or ''}",
-        f"链接：{link or ''}",
-    ])
+    return "\n".join(
+        [
+            f"名称：{resource.name}",
+            f"标签：{resource.tags or ''}",
+            f"链接：{link or ''}",
+        ]
+    )
 
 
 def build_push_item(resource: Resource) -> PushItem:
@@ -69,8 +112,73 @@ def build_push_item(resource: Resource) -> PushItem:
     )
 
 
+def build_search_item(resource: Resource) -> SearchItem:
+    return SearchItem(
+        id=resource.id,
+        name=resource.name,
+        tags=resource.tags,
+        link=resource.new_share_link or resource.original_link,
+    )
+
+
+def build_search_detail(resource: Resource) -> SearchDetail:
+    return SearchDetail(
+        id=resource.id,
+        name=resource.name,
+        tags=resource.tags,
+        link=resource.new_share_link or resource.original_link,
+        extract_code=resource.new_extract_code or resource.extract_code,
+    )
+
+
+def encode_cursor(created_at: datetime, resource_id: int) -> str:
+    payload = {
+        "created_at": created_at.isoformat(),
+        "id": resource_id,
+    }
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_cursor(cursor: str) -> tuple[datetime, int]:
+    padding = "=" * (-len(cursor) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode("utf-8"))
+        created_at = datetime.fromisoformat(payload["created_at"])
+        resource_id = int(payload["id"])
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return created_at, resource_id
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="无效的游标参数") from exc
+
+
+def build_search_conditions(keyword: str):
+    raw = keyword.strip()
+    normalized = normalize_search_keyword(raw)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="检索关键词不能为空")
+
+    conditions = [Resource.search_text.ilike(f"%{normalized}%")]
+
+    share_id, extract_code = parse_share_link(raw)
+    if share_id:
+        if extract_code:
+            conditions.append(and_(Resource.share_id == share_id, Resource.extract_code == extract_code))
+            conditions.append(and_(Resource.new_share_id == share_id, Resource.new_extract_code == extract_code))
+        else:
+            conditions.append(Resource.share_id == share_id)
+            conditions.append(Resource.new_share_id == share_id)
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        conditions.append(Resource.original_link == raw)
+        conditions.append(Resource.new_share_link == raw)
+
+    return or_(*conditions)
+
+
 @router.get("/push/health")
-async def health(api_key: ApiKey = Depends(verify_api_key)):
+async def health(api_key: ApiKey = Depends(require_api_key(["push:read"]))):
     return {"status": "ok", "key_name": api_key.name}
 
 
@@ -78,7 +186,7 @@ async def health(api_key: ApiKey = Depends(verify_api_key)):
 async def get_pending(
     limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    api_key: ApiKey = Depends(verify_api_key),
+    api_key: ApiKey = Depends(require_api_key(["push:read"])),
 ):
     result = await db.execute(
         select(Resource)
@@ -103,7 +211,7 @@ async def lease_pending(
     limit: int = Query(10, ge=1, le=100),
     retry_stale_minutes: int = Query(30, ge=5, le=1440),
     db: AsyncSession = Depends(get_db),
-    api_key: ApiKey = Depends(verify_api_key),
+    api_key: ApiKey = Depends(require_api_key(["push:read"])),
 ):
     stale_before = datetime.now(timezone.utc) - timedelta(minutes=retry_stale_minutes)
     stale_result = await db.execute(
@@ -132,12 +240,14 @@ async def lease_pending(
         resource.status = "推送中"
         resource.error_message = None
         payload = build_push_item(resource).model_dump(mode="json")
-        db.add(TelegramPushRecord(
-            resource_id=resource.id,
-            status="running",
-            push_payload=payload,
-            attempt=1,
-        ))
+        db.add(
+            TelegramPushRecord(
+                resource_id=resource.id,
+                status="running",
+                push_payload=payload,
+                attempt=1,
+            )
+        )
         items.append(payload)
 
     await db.commit()
@@ -157,7 +267,7 @@ async def lease_pending(
 async def push_callback(
     req: CallbackRequest,
     db: AsyncSession = Depends(get_db),
-    api_key: ApiKey = Depends(verify_api_key),
+    api_key: ApiKey = Depends(require_api_key(["push:callback"])),
 ):
     result = await db.execute(
         select(Resource).where(Resource.id == req.resource_id)
@@ -199,3 +309,59 @@ async def push_callback(
 
     await db.commit()
     return {"ok": True, "resource_id": resource.id, "new_status": resource.status}
+
+
+@router.get("/search/health")
+async def search_health(api_key: ApiKey = Depends(require_api_key(["search:read"]))):
+    return {"status": "ok", "key_name": api_key.name}
+
+
+@router.get("/search/resources", response_model=SearchResponse)
+async def search_resources(
+    q: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(10, ge=1, le=50),
+    cursor: Optional[str] = Query(None, max_length=512),
+    status: Optional[str] = Query(None, max_length=32),
+    db: AsyncSession = Depends(get_db),
+    api_key: ApiKey = Depends(require_api_key(["search:read"])),
+):
+    query = select(Resource)
+
+    if status:
+        query = query.where(Resource.status == status)
+
+    query = query.where(build_search_conditions(q))
+
+    if cursor:
+        cursor_created_at, cursor_id = decode_cursor(cursor)
+        query = query.where(
+            or_(
+                Resource.created_at < cursor_created_at,
+                and_(Resource.created_at == cursor_created_at, Resource.id < cursor_id),
+            )
+        )
+
+    result = await db.execute(
+        query.order_by(Resource.created_at.desc(), Resource.id.desc()).limit(limit + 1)
+    )
+    resources = result.scalars().all()
+
+    has_more = len(resources) > limit
+    resources = resources[:limit]
+
+    items = [build_search_item(resource) for resource in resources]
+    next_cursor = encode_cursor(resources[-1].created_at, resources[-1].id) if has_more and resources else None
+    return SearchResponse(items=items, next_cursor=next_cursor, has_more=has_more)
+
+
+@router.get("/search/resources/{resource_id}", response_model=SearchDetail)
+async def get_search_resource(
+    resource_id: int,
+    db: AsyncSession = Depends(get_db),
+    api_key: ApiKey = Depends(require_api_key(["search:read"])),
+):
+    result = await db.execute(select(Resource).where(Resource.id == resource_id))
+    resource = result.scalar_one_or_none()
+    if not resource:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return build_search_detail(resource)

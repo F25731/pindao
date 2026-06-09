@@ -29,6 +29,7 @@ from app.services.account_pool import (
 from app.utils.link_parser import build_share_link
 from app.config import settings
 from app.services.system_log import append_system_log
+from app.utils.search_index import build_resource_search_text
 
 logger = logging.getLogger("worker.transfer")
 
@@ -370,6 +371,16 @@ async def execute_transfer(db: AsyncSession, task: Task, resource: Resource):
         resource.new_share_id = checkpoint["new_share_id"]
         resource.new_extract_code = checkpoint["new_extract_code"]
         resource.new_share_link = checkpoint["new_share_link"]
+        resource.search_text = build_resource_search_text(
+            resource.name,
+            resource.tags or "",
+            resource.original_link or "",
+            resource.share_id or "",
+            resource.extract_code or "",
+            resource.new_share_link or "",
+            resource.new_share_id or "",
+            resource.new_extract_code or "",
+        )
         resource.transferred_at = datetime.now(timezone.utc)
         resource.error_message = None
         resource.error_response = None

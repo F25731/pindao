@@ -1,13 +1,13 @@
 <template>
   <div>
     <n-space style="margin-bottom: 16px;">
-      <n-button type="primary" @click="showCreate = true">创建 API 密钥</n-button>
+      <n-button type="primary" @click="openCreate">创建 API 密钥</n-button>
       <n-button :loading="loading" @click="loadData">刷新</n-button>
     </n-space>
 
     <n-card title="API 调用说明" size="small" style="margin-bottom: 16px;">
       <n-alert type="info" style="margin-bottom: 12px;">
-        外部程序通过 X-API-Key 调用接口。AstrBot 插件推荐使用 lease 领取任务，发送成功后 callback 回写结果。
+        外部程序通过 X-API-Key 调用接口。推送 API 和检索 API 已分开，AstrBot 插件推荐使用 push/lease 领取任务，发送成功后 callback 回写结果。
       </n-alert>
       <n-code :code="apiGuide" language="bash" word-wrap />
     </n-card>
@@ -17,6 +17,15 @@
     <n-modal v-model:show="showCreate" preset="dialog" title="创建 API 密钥" positive-text="创建" negative-text="取消" @positive-click="handleCreate">
       <n-form-item label="名称/用途">
         <n-input v-model:value="createName" placeholder="如：AstrBot 推送" />
+      </n-form-item>
+      <n-form-item label="权限">
+        <n-checkbox-group v-model:value="createPermissions">
+          <n-space vertical>
+            <n-checkbox value="push:read">推送读取</n-checkbox>
+            <n-checkbox value="push:callback">推送回调</n-checkbox>
+            <n-checkbox value="search:read">检索读取</n-checkbox>
+          </n-space>
+        </n-checkbox-group>
       </n-form-item>
     </n-modal>
 
@@ -32,7 +41,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, h } from 'vue'
-import { NAlert, NButton, NCard, NCode, NDataTable, NFormItem, NInput, NModal, NSpace, NTag, useMessage } from 'naive-ui'
+import { NAlert, NButton, NCard, NCheckbox, NCheckboxGroup, NCode, NDataTable, NFormItem, NInput, NModal, NSpace, NTag, useMessage } from 'naive-ui'
 import { api } from '../api/client'
 
 const message = useMessage()
@@ -41,6 +50,7 @@ const loading = ref(false)
 const showCreate = ref(false)
 const showKey = ref(false)
 const createName = ref('')
+const createPermissions = ref<string[]>(['push:read', 'push:callback'])
 const newKey = ref('')
 const apiGuide = `# 健康检查
 curl -H "X-API-Key: 你的密钥" http://你的后端地址:8000/api/external/push/health
@@ -56,12 +66,22 @@ curl -X POST -H "X-API-Key: 你的密钥" -H "Content-Type: application/json" \\
 # 回调推送失败
 curl -X POST -H "X-API-Key: 你的密钥" -H "Content-Type: application/json" \\
   -d '{"resource_id":1,"status":"failed","error_message":"失败原因"}' \\
-  http://你的后端地址:8000/api/external/push/callback`
+  http://你的后端地址:8000/api/external/push/callback
+
+# 检索健康检查
+curl -H "X-API-Key: 你的密钥" http://你的后端地址:8000/api/external/search/health
+
+# 检索资源
+curl -H "X-API-Key: 你的密钥" "http://你的后端地址:8000/api/external/search/resources?q=关键词&limit=10"
+
+# 查看单条资源详情
+curl -H "X-API-Key: 你的密钥" http://你的后端地址:8000/api/external/search/resources/1`
 
 const columns = [
   { title: 'ID', key: 'id', width: 50 },
   { title: '名称', key: 'name', width: 150 },
   { title: '前缀', key: 'key_prefix', width: 100 },
+  { title: '权限', key: 'permissions', width: 220, render: (row: any) => (row.permissions || []).join(', ') || '-' },
   {
     title: '状态', key: 'is_active', width: 80,
     render: (row: any) => h(NTag, { type: row.is_active ? 'success' : 'error', size: 'small' }, () => row.is_active ? '启用' : '禁用')
@@ -77,16 +97,23 @@ const columns = [
   },
 ]
 
+function openCreate() {
+  createName.value = ''
+  createPermissions.value = ['push:read', 'push:callback']
+  showCreate.value = true
+}
+
 async function handleCreate() {
   if (!createName.value) {
     message.error('请输入名称')
     return false
   }
   try {
-    const res = await api.post('/api/api-keys', { name: createName.value })
+    const res = await api.post('/api/api-keys', { name: createName.value, permissions: createPermissions.value })
     newKey.value = res.data.key
     showKey.value = true
     createName.value = ''
+    createPermissions.value = ['push:read', 'push:callback']
     loadData()
   } catch (e: any) {
     message.error('创建失败')

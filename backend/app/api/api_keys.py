@@ -12,6 +12,12 @@ from app.utils.security import generate_api_key, hash_api_key
 
 router = APIRouter()
 
+ALLOWED_API_PERMISSIONS = {
+    "push:read",
+    "push:callback",
+    "search:read",
+}
+
 
 class ApiKeyCreate(BaseModel):
     name: str
@@ -54,12 +60,17 @@ async def create_api_key(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
+    permissions = list(dict.fromkeys(req.permissions or ["push:read", "push:callback"]))
+    invalid_permissions = [permission for permission in permissions if permission not in ALLOWED_API_PERMISSIONS]
+    if invalid_permissions:
+        raise HTTPException(status_code=400, detail=f"不支持的权限: {', '.join(invalid_permissions)}")
+
     raw_key = generate_api_key()
     key_obj = ApiKey(
         name=req.name,
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
-        permissions=req.permissions or ["push:read", "push:callback"],
+        permissions=permissions,
         created_by=user.id,
     )
     db.add(key_obj)

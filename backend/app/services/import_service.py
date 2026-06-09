@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ImportBatch, RawImportRow, Resource, Task
 from app.utils.excel_io import read_file_raw_stream
 from app.utils.link_parser import normalize_name, parse_share_link, parse_tags
+from app.utils.search_index import build_resource_search_text
 
 RAW_LOAD_BATCH_SIZE = 5000
 PROCESS_BATCH_SIZE = 2000
@@ -163,6 +164,7 @@ async def process_import_rows(db: AsyncSession, batch: ImportBatch, limit: int =
             original_link=link,
             share_id=share_id,
             extract_code=extract_code,
+            search_text=build_resource_search_text(name, tags, link, share_id, extract_code),
             status="待转存",
         )
         resources_to_add.append(resource)

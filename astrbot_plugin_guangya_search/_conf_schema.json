@@ -1,0 +1,44 @@
+{
+  "api_base": {
+    "title": "后端地址",
+    "description": "光鸭资源系统后端地址",
+    "type": "string",
+    "default": ""
+  },
+  "api_key": {
+    "title": "API 密钥",
+    "description": "后台创建的 search:read 密钥",
+    "type": "string",
+    "default": ""
+  },
+  "enabled": {
+    "title": "启用",
+    "description": "是否启用检索插件",
+    "type": "bool",
+    "default": true
+  },
+  "default_limit": {
+    "title": "默认条数",
+    "description": "每次检索默认返回的条数",
+    "type": "int",
+    "default": 10
+  },
+  "session_ttl_seconds": {
+    "title": "缓存时长",
+    "description": "检索会话缓存保留时间（秒）",
+    "type": "int",
+    "default": 900
+  },
+  "request_timeout_seconds": {
+    "title": "请求超时",
+    "description": "请求后端的超时时间（秒）",
+    "type": "int",
+    "default": 20
+  },
+  "status": {
+    "title": "状态过滤",
+    "description": "可选，只检索某个状态的资源；留空表示全部",
+    "type": "string",
+    "default": ""
+  }
+}
