@@ -7,6 +7,7 @@ from app.database import engine
 from app.models import Base
 from app.api.router import api_router
 from app.services.schema_service import ensure_runtime_database
+from app.telegram_bot.runtime import start_configured_bots, stop_bots
 
 
 @asynccontextmanager
@@ -20,8 +21,13 @@ async def lifespan(app: FastAPI):
 
     async with async_session() as session:
         await ensure_admin_exists(session)
-    yield
-    await engine.dispose()
+
+    start_configured_bots()
+    try:
+        yield
+    finally:
+        await stop_bots()
+        await engine.dispose()
 
 
 app = FastAPI(

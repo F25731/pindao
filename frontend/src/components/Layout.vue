@@ -93,6 +93,7 @@ const pageTitles: Record<string, string> = {
   AccountPool: '账号池管理',
   ExportExcel: '导出 Excel',
   TelegramPush: '推送管理',
+  TelegramBot: 'Telegram Bot',
   ApiKeys: 'API 密钥',
   Stats: '详细统计',
 }
@@ -110,6 +111,7 @@ const menuOptions: MenuOption[] = [
   { label: '账号池', key: 'AccountPool' },
   { label: '导出 Excel', key: 'ExportExcel' },
   { label: '推送管理', key: 'TelegramPush' },
+  { label: 'Telegram Bot', key: 'TelegramBot' },
   { label: 'API 密钥', key: 'ApiKeys' },
 ]
 

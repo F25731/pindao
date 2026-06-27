@@ -13,6 +13,8 @@ from app.services.system_control import set_worker_control
 
 router = APIRouter()
 QUERY_CHUNK_SIZE = 1000
+RETRY_ONLY_STATUSES = {"failed_retryable", "failed_final", "skipped"}
+STARTABLE_STATUSES = {"pending", "paused", "pause_requested"}
 
 ACCOUNT_BLOCKED_KEYWORDS = (
     "没有可用账号",
@@ -40,6 +42,7 @@ class TaskOut(BaseModel):
     completed_at: Optional[datetime]
     next_retry_at: Optional[datetime]
     created_at: datetime
+    paused_from_status: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -97,7 +100,8 @@ async def list_tasks(
     result = await db.execute(
         query.order_by(Task.created_at.desc()).offset(page * page_size).limit(page_size)
     )
-    items = result.scalars().all()
+    tasks = result.scalars().all()
+    items = [_task_out(task) for task in tasks]
     return TaskListResponse(items=items, total=total)
 
 
@@ -170,6 +174,12 @@ async def list_failed_tasks(
     return FailedTaskListResponse(items=items, total=total or 0)
 
 
+def _task_out(task: Task) -> TaskOut:
+    data = TaskOut.model_validate(task).model_dump()
+    data["paused_from_status"] = (task.checkpoint or {}).get("paused_from_status")
+    return TaskOut(**data)
+
+
 @router.post("/failed/retry-all")
 async def retry_all_failed_tasks(
     db: AsyncSession = Depends(get_db),
@@ -194,10 +204,14 @@ async def retry_all_failed_tasks(
 def _set_task_paused(task: Task, resource: Resource | None):
     if task.status == "running":
         checkpoint = task.checkpoint or {}
+        checkpoint["paused_from_status"] = task.status
         checkpoint["pause_requested"] = True
         task.checkpoint = checkpoint
         task.status = "pause_requested"
     elif task.status in ("pending", "failed_retryable", "pause_requested", "paused"):
+        checkpoint = task.checkpoint or {}
+        checkpoint.setdefault("paused_from_status", task.status)
+        task.checkpoint = checkpoint
         task.status = "paused"
     if resource:
         resource.status = "转存暂停"
@@ -221,6 +235,7 @@ def _set_task_started(task: Task, resource: Resource | None):
     checkpoint = task.checkpoint or {}
     checkpoint.pop("pause_requested", None)
     checkpoint.pop("cancel_requested", None)
+    checkpoint.pop("paused_from_status", None)
     task.checkpoint = checkpoint
     task.status = "pending"
     task.account_id = None
@@ -231,6 +246,19 @@ def _set_task_started(task: Task, resource: Resource | None):
         task.error_response = None
     if resource:
         resource.status = "待转存"
+
+
+def _must_use_retry(task: Task) -> bool:
+    if task.status in RETRY_ONLY_STATUSES:
+        return True
+    if task.status in ("paused", "pause_requested"):
+        checkpoint = task.checkpoint or {}
+        return checkpoint.get("paused_from_status") in RETRY_ONLY_STATUSES
+    return False
+
+
+def _can_start_without_retry(task: Task) -> bool:
+    return task.status in STARTABLE_STATUSES and not _must_use_retry(task)
 
 
 def _set_task_retry(task: Task, resource: Resource | None):
@@ -311,7 +339,7 @@ async def resume_account_blocked_tasks(
         .join(Resource, Task.resource_id == Resource.id)
         .where(
             Task.task_type == "transfer",
-            Task.status.in_(("paused", "failed_retryable", "failed_final")),
+            Task.status.in_(("paused", "failed_retryable")),
         )
         .order_by(Task.created_at.asc())
     )
@@ -346,18 +374,16 @@ async def start_all_tasks(
         .join(Resource, Task.resource_id == Resource.id, isouter=True)
         .where(
             Task.task_type == "transfer",
-            Task.status.in_(("paused", "pause_requested", "failed_retryable", "failed_final", "skipped", "pending")),
+            Task.status.in_(tuple(STARTABLE_STATUSES)),
         )
         .order_by(Task.created_at.asc())
     )
 
     updated = 0
     for task, resource in result.all():
-        if task.status in ("failed_retryable", "failed_final"):
-            _set_task_retry(task, resource)
-        else:
+        if _can_start_without_retry(task):
             _set_task_started(task, resource)
-        updated += 1
+            updated += 1
 
     await db.commit()
     return {"ok": True, "updated": updated, "worker_paused": False}
@@ -415,8 +441,8 @@ async def resume_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.status not in ("paused", "pause_requested"):
-        raise HTTPException(status_code=400, detail="当前状态不支持恢复")
+    if task.status not in ("paused", "pause_requested") or _must_use_retry(task):
+        raise HTTPException(status_code=400, detail="当前状态不支持恢复，请使用重试操作")
 
     result = await db.execute(select(Resource).where(Resource.id == task.resource_id))
     resource = result.scalar_one_or_none()
@@ -451,11 +477,8 @@ async def batch_start_tasks(
     tasks, resources = await _load_tasks_with_resources(db, req.task_ids)
     count = 0
     for task in tasks:
-        if task.status in ("paused", "pause_requested", "failed_retryable", "failed_final", "skipped", "pending"):
-            if task.status in ("failed_retryable", "failed_final"):
-                _set_task_retry(task, resources.get(task.resource_id))
-            else:
-                _set_task_started(task, resources.get(task.resource_id))
+        if _can_start_without_retry(task):
+            _set_task_started(task, resources.get(task.resource_id))
             count += 1
     await db.commit()
     return {"ok": True, "updated": count}

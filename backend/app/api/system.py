@@ -70,11 +70,15 @@ async def pause_system(
         resource = resources.get(task.resource_id)
         if task.status == "running":
             checkpoint = task.checkpoint or {}
+            checkpoint["paused_from_status"] = task.status
             checkpoint["pause_requested"] = True
             task.checkpoint = checkpoint
             task.status = "pause_requested"
             pause_requested += 1
         else:
+            checkpoint = task.checkpoint or {}
+            checkpoint.setdefault("paused_from_status", task.status)
+            task.checkpoint = checkpoint
             task.status = "paused"
             task.next_retry_at = None
             paused_now += 1

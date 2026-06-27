@@ -56,9 +56,6 @@ const startableCount = computed(() => {
     'pending',
     'paused',
     'pause_requested',
-    'failed_retryable',
-    'failed_final',
-    'skipped',
   ].reduce((sum, status) => sum + (queueStatus.value[status] || 0), 0)
 })
 
@@ -96,7 +93,11 @@ const columns = [
         buttons.push(h(NButton, { size: 'small', type: 'warning', onClick: () => pauseTask(row.id) }, () => '暂停'))
       }
       if (row.status === 'paused' || row.status === 'pause_requested') {
-        buttons.push(h(NButton, { size: 'small', type: 'primary', onClick: () => resumeTask(row.id) }, () => '恢复'))
+        if (['failed_retryable', 'failed_final', 'skipped'].includes(row.paused_from_status)) {
+          buttons.push(h(NButton, { size: 'small', type: 'primary', onClick: () => retryTask(row.id) }, () => '重试'))
+        } else {
+          buttons.push(h(NButton, { size: 'small', type: 'primary', onClick: () => resumeTask(row.id) }, () => '恢复'))
+        }
       }
       if (row.status === 'pending' || row.status === 'running') {
         buttons.push(h(NButton, { size: 'small', type: 'error', onClick: () => cancelTask(row.id) }, () => '取消'))
@@ -139,7 +140,7 @@ async function resumeAccountBlocked() {
 }
 
 async function startAllTasks() {
-  if (!window.confirm(`确定开始全部可启动任务？当前约 ${startableCount.value} 个任务会进入队列。`)) return
+  if (!window.confirm(`确定开始全部待处理/暂停任务？失败和已取消任务不会被重新入队。当前约 ${startableCount.value} 个任务会进入队列。`)) return
   startingAll.value = true
   try {
     const res = await api.post('/api/tasks/start-all')
@@ -176,6 +177,16 @@ async function pauseTask(taskId: number) {
     loadData()
   } catch (e: any) {
     message.error(e.response?.data?.detail || '暂停失败')
+  }
+}
+
+async function retryTask(taskId: number) {
+  try {
+    await api.post('/api/tasks/batch-retry', { task_ids: [taskId] })
+    message.success('已重试')
+    loadData()
+  } catch (e: any) {
+    message.error(e.response?.data?.detail || '重试失败')
   }
 }
 
