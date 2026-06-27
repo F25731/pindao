@@ -73,9 +73,27 @@ class TelegramSearchBot:
         self._stop_event: asyncio.Event | None = None
         self._sessions: dict[int, SearchSession] = {}
         self._bot_username: str | None = None
+        self._last_error: str | None = None
+        self._last_start_attempt_at: datetime | None = None
+        self._started_at: datetime | None = None
+        self._stopped_at: datetime | None = None
 
     def running(self) -> bool:
         return bool(self._task and not self._task.done())
+
+    def status(self) -> dict[str, Any]:
+        task_done = self._task.done() if self._task else None
+        return {
+            "running": self.running(),
+            "starting": bool(self._task and not task_done and self._started_at is None),
+            "task_exists": self._task is not None,
+            "task_done": task_done,
+            "bot_username": self._bot_username,
+            "last_error": self._last_error,
+            "last_start_attempt_at": self._last_start_attempt_at.isoformat() if self._last_start_attempt_at else None,
+            "started_at": self._started_at.isoformat() if self._started_at else None,
+            "stopped_at": self._stopped_at.isoformat() if self._stopped_at else None,
+        }
 
     def start_background(self) -> str:
         config = self.store.get()
@@ -85,9 +103,22 @@ class TelegramSearchBot:
             return "未配置 Telegram Bot Token"
         if self.running():
             return "Bot 已在运行"
+        self._last_error = None
+        self._last_start_attempt_at = datetime.now(timezone.utc)
+        self._started_at = None
+        self._stopped_at = None
         self._stop_event = asyncio.Event()
         self._task = asyncio.create_task(self._run(config.telegram_bot_token))
+        self.metrics.add_event("info", "Search Bot", "Bot starting")
         return "Bot 正在启动"
+
+    async def wait_started(self, timeout_seconds: float = 2.0) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            if self._last_error or self._started_at or not self.running():
+                break
+            await asyncio.sleep(0.05)
+        return self.status()
 
     async def stop(self) -> None:
         if self._stop_event:
@@ -171,13 +202,17 @@ class TelegramSearchBot:
                 drop_pending_updates=True,
             )
             logger.info("光鸭独立检索 Telegram Bot 已启动")
+            self._last_error = None
+            self._started_at = datetime.now(timezone.utc)
             self.metrics.mark_started(self._bot_username)
             if self._stop_event:
                 await self._stop_event.wait()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             logger.exception("光鸭独立检索 Telegram Bot 运行失败")
+            self.metrics.add_event("error", "Search Bot", f"Bot failed: {self._last_error}")
         finally:
             try:
                 if application.updater and application.updater.running:
@@ -187,6 +222,7 @@ class TelegramSearchBot:
                 await application.shutdown()
             except Exception:
                 logger.exception("光鸭独立检索 Telegram Bot 停止异常")
+            self._stopped_at = datetime.now(timezone.utc)
             self.metrics.mark_stopped()
 
     def _config(self) -> RuntimeConfig:

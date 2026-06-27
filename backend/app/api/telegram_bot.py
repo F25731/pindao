@@ -108,9 +108,14 @@ async def _test_search_api(config) -> dict[str, Any]:
     except Exception as exc:
         return _error_payload(exc, started)
 
+def _search_runtime_response() -> dict[str, Any]:
+    return search_bot.status()
+
+
 def _config_response() -> dict[str, Any]:
     data = store.get().public_dict()
     data["bot_running"] = search_bot.running()
+    data["search_bot_status"] = _search_runtime_response()
     data["push_bot_running"] = push_bot.running()
     return data
 
@@ -150,7 +155,8 @@ async def update_config(payload: BotConfigPayload, user: AdminUser = Depends(get
 @router.post("/search/start")
 async def start_search_bot(user: AdminUser = Depends(get_current_user)):
     message = search_bot.start_background()
-    return {"message": message, "bot_running": search_bot.running()}
+    status = await search_bot.wait_started()
+    return {"message": message, "bot_running": search_bot.running(), "search_bot_status": status}
 
 
 @router.post("/search/stop")
@@ -162,7 +168,8 @@ async def stop_search_bot(user: AdminUser = Depends(get_current_user)):
 @router.post("/search/restart")
 async def restart_search_bot(user: AdminUser = Depends(get_current_user)):
     message = await search_bot.restart()
-    return {"message": message, "bot_running": search_bot.running()}
+    status = await search_bot.wait_started()
+    return {"message": message, "bot_running": search_bot.running(), "search_bot_status": status}
 
 
 @router.get("/search/test")
@@ -179,6 +186,7 @@ async def test_search_bot_connection(user: AdminUser = Depends(get_current_user)
     return {
         "ok": ok,
         "bot_running": search_bot.running(),
+        "search_bot_status": _search_runtime_response(),
         "config": {
             "bot_enabled": config.bot_enabled,
             "telegram_bot_token_set": bool(config.telegram_bot_token),
@@ -238,6 +246,7 @@ async def health(user: AdminUser = Depends(get_current_user)):
     return {
         "ok": True,
         "bot_running": search_bot.running(),
+        "search_bot_status": _search_runtime_response(),
         "push_bot_running": push_bot.running(),
         "guangya_api_ok": api_ok,
         "guangya_api": api_health,
@@ -248,7 +257,9 @@ async def health(user: AdminUser = Depends(get_current_user)):
 
 @router.get("/stats")
 async def stats(user: AdminUser = Depends(get_current_user)):
-    return metrics.snapshot(search_bot.running(), push_bot.running())
+    data = metrics.snapshot(search_bot.running(), push_bot.running())
+    data["search_bot_status"] = _search_runtime_response()
+    return data
 
 
 @router.get("/logs")

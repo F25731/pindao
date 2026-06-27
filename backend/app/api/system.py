@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import AdminUser, Resource, Task
+from app.models import AdminUser, Task
 from app.services.system_control import get_worker_concurrency, get_worker_control, set_worker_concurrency, set_worker_control
 
 router = APIRouter()
@@ -45,55 +45,64 @@ async def pause_system(
     db: AsyncSession = Depends(get_db),
     user: AdminUser = Depends(get_current_user),
 ):
-    control = await set_worker_control(
-        db,
-        paused=True,
-        reason=(req.reason if req else None) or "管理员全局暂停",
+    reason = (req.reason if req else None) or "\u7ba1\u7406\u5458\u5168\u5c40\u6682\u505c"
+    control = await set_worker_control(db, paused=True, reason=reason)
+
+    pause_requested_result = await db.execute(
+        text(
+            """
+            UPDATE tasks
+            SET checkpoint = COALESCE(checkpoint, '{}'::jsonb)
+                    || jsonb_build_object('paused_from_status', status, 'pause_requested', true),
+                status = 'pause_requested',
+                error_message = COALESCE(error_message, :reason),
+                updated_at = now()
+            WHERE task_type = 'transfer'
+              AND status = 'running'
+            """
+        ),
+        {"reason": reason},
     )
 
-    result = await db.execute(
-        select(Task).where(
-            Task.task_type == "transfer",
-            Task.status.in_(("pending", "failed_retryable", "running", "pause_requested")),
-        )
+    paused_result = await db.execute(
+        text(
+            """
+            UPDATE tasks
+            SET checkpoint = CASE
+                    WHEN COALESCE(checkpoint, '{}'::jsonb) ? 'paused_from_status'
+                    THEN COALESCE(checkpoint, '{}'::jsonb)
+                    ELSE COALESCE(checkpoint, '{}'::jsonb) || jsonb_build_object('paused_from_status', status)
+                END,
+                status = 'paused',
+                next_retry_at = NULL,
+                error_message = COALESCE(error_message, :reason),
+                updated_at = now()
+            WHERE task_type = 'transfer'
+              AND status IN ('pending', 'failed_retryable', 'pause_requested')
+            """
+        ),
+        {"reason": reason},
     )
-    tasks = result.scalars().all()
-    resource_ids = [task.resource_id for task in tasks]
-    resources = {}
-    if resource_ids:
-        res_result = await db.execute(select(Resource).where(Resource.id.in_(resource_ids)))
-        resources = {resource.id: resource for resource in res_result.scalars().all()}
 
-    paused_now = 0
-    pause_requested = 0
-    for task in tasks:
-        resource = resources.get(task.resource_id)
-        if task.status == "running":
-            checkpoint = task.checkpoint or {}
-            checkpoint["paused_from_status"] = task.status
-            checkpoint["pause_requested"] = True
-            task.checkpoint = checkpoint
-            task.status = "pause_requested"
-            pause_requested += 1
-        else:
-            checkpoint = task.checkpoint or {}
-            checkpoint.setdefault("paused_from_status", task.status)
-            task.checkpoint = checkpoint
-            task.status = "paused"
-            task.next_retry_at = None
-            paused_now += 1
-
-        task.error_message = task.error_message or "管理员全局暂停"
-        if resource and resource.status in ("待转存", "转存中", "失败待重试"):
-            resource.status = "转存暂停"
-            resource.error_message = resource.error_message or "管理员全局暂停"
+    await db.execute(
+        text(
+            """
+            UPDATE resources
+            SET status = '\u8f6c\u5b58\u6682\u505c',
+                error_message = COALESCE(error_message, :reason),
+                updated_at = now()
+            WHERE status IN ('\u5f85\u8f6c\u5b58', '\u8f6c\u5b58\u4e2d', '\u5931\u8d25\u5f85\u91cd\u8bd5')
+            """
+        ),
+        {"reason": reason},
+    )
 
     await db.commit()
     return {
         "ok": True,
         "worker_paused": bool(control.get("paused")),
-        "paused": paused_now,
-        "pause_requested": pause_requested,
+        "paused": paused_result.rowcount or 0,
+        "pause_requested": pause_requested_result.rowcount or 0,
     }
 
 
