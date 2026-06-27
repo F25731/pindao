@@ -134,7 +134,6 @@ async def resume_system(
                 WHERE task_type = 'transfer'
                   AND status IN ('paused', 'pause_requested')
                   AND COALESCE(checkpoint, '{}'::jsonb) ? 'paused_from_status'
-                  AND (COALESCE(checkpoint, '{}'::jsonb) ? 'global_pause' OR error_message = :pause_reason)
                   AND checkpoint->>'paused_from_status' IN ('pending', 'failed_retryable', 'running', 'pause_requested')
             ),
             updated_tasks AS (
@@ -161,7 +160,7 @@ async def resume_system(
                         '{}'::jsonb
                     ),
                     error_message = CASE
-                        WHEN t.error_message = :pause_reason THEN NULL
+                        WHEN (t.error_message = :pause_reason OR t.error_message = '\u7ba1\u7406\u5458\u5168\u5c40\u6682\u505c') THEN NULL
                         ELSE t.error_message
                     END,
                     updated_at = now()
@@ -177,7 +176,7 @@ async def resume_system(
                         ELSE '\u5f85\u8f6c\u5b58'
                     END,
                     error_message = CASE
-                        WHEN r.error_message = :pause_reason THEN NULL
+                        WHEN (r.error_message = :pause_reason OR r.error_message = '\u7ba1\u7406\u5458\u5168\u5c40\u6682\u505c') THEN NULL
                         ELSE r.error_message
                     END,
                     updated_at = now()
