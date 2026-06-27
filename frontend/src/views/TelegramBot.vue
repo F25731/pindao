@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="telegram-bot-page">
     <n-space style="margin-bottom: 16px;" align="center">
       <n-button :loading="loading" @click="loadAll">刷新</n-button>
@@ -23,7 +23,21 @@
             <n-button type="primary" :loading="actionLoading" @click="botAction('search', 'start')">启动</n-button>
             <n-button :loading="actionLoading" @click="botAction('search', 'restart')">重启</n-button>
             <n-button type="error" ghost :loading="actionLoading" @click="botAction('search', 'stop')">停止</n-button>
+            <n-button type="info" :loading="testingSearch" @click="testSearchConnection">测试连接</n-button>
           </n-space>
+          <n-alert v-if="searchTestResult" :type="searchTestResult.ok ? 'success' : 'error'" :title="searchTestResult.ok ? '搜索 Bot 连接正常' : '搜索 Bot 连接异常'" style="margin-bottom: 12px;">
+            <n-descriptions :column="1" size="small">
+              <n-descriptions-item label="pindao API 地址">{{ searchTestResult.config?.guangya_api_base || '-' }}</n-descriptions-item>
+              <n-descriptions-item label="Telegram Token">{{ searchTestResult.config?.telegram_bot_token_set ? '已配置' : '未配置' }}</n-descriptions-item>
+              <n-descriptions-item label="搜索 API Key">{{ searchTestResult.config?.guangya_api_key_set ? '已配置' : '未配置' }}</n-descriptions-item>
+              <n-descriptions-item label="代理">{{ searchTestResult.config?.proxy_enabled ? (searchTestResult.config?.proxy_url_set ? '已启用并配置' : '已启用但未配置地址') : '未启用' }}</n-descriptions-item>
+              <n-descriptions-item label="Telegram">{{ stepText(searchTestResult.telegram) }}</n-descriptions-item>
+              <n-descriptions-item label="Telegram Bot">{{ searchTestResult.telegram?.bot?.username ? `@${searchTestResult.telegram.bot.username}` : '-' }}</n-descriptions-item>
+              <n-descriptions-item label="搜索 API">{{ stepText(searchTestResult.search_api) }}</n-descriptions-item>
+              <n-descriptions-item label="API 返回">{{ formatJson(searchTestResult.search_api?.response) }}</n-descriptions-item>
+              <n-descriptions-item label="错误详情">{{ searchTestErrorText }}</n-descriptions-item>
+            </n-descriptions>
+          </n-alert>
           <n-form label-placement="top">
             <n-grid :cols="2" :x-gap="12">
               <n-gi><n-form-item label="Telegram Bot Token"><n-input v-model:value="form.telegram_bot_token" type="password" placeholder="留空表示不修改" /></n-form-item></n-gi>
@@ -113,7 +127,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
-  NButton, NCard, NCheckbox, NDescriptions, NDescriptionsItem, NEmpty, NForm, NFormItem,
+  NAlert, NButton, NCard, NCheckbox, NDescriptions, NDescriptionsItem, NEmpty, NForm, NFormItem,
   NGi, NGrid, NInput, NInputNumber, NList, NListItem, NSelect, NSpace, NStatistic,
   NTabPane, NTabs, NTag, NTimeline, NTimelineItem, useMessage
 } from 'naive-ui'
@@ -124,9 +138,11 @@ const loading = ref(false)
 const saving = ref(false)
 const checking = ref(false)
 const actionLoading = ref(false)
+const testingSearch = ref(false)
 const config = ref<any>({})
 const stats = ref<any>({ totals: {}, today: {}, keywords: [] })
 const health = ref<any>({})
+const searchTestResult = ref<any>(null)
 const logs = ref<any[]>([])
 const lastEventId = ref(0)
 
@@ -144,6 +160,20 @@ const parseModeOptions = [
   { label: 'MarkdownV2', value: 'MarkdownV2' },
 ]
 
+
+const searchTestErrorText = computed(() => {
+  const result = searchTestResult.value
+  if (!result) return '-'
+  const errors = []
+  if (result.telegram && !result.telegram.ok) {
+    errors.push(`Telegram: ${result.telegram.error_type || 'Error'} ${result.telegram.status_code || ''} ${result.telegram.error || ''}`.trim())
+  }
+  if (result.search_api && !result.search_api.ok) {
+    errors.push(`搜索 API: ${result.search_api.error_type || 'Error'} ${result.search_api.status_code || ''} ${result.search_api.error || ''}`.trim())
+    if (result.search_api.response_text) errors.push(`响应: ${result.search_api.response_text}`)
+  }
+  return errors.join('；') || '-'
+})
 const statCards = computed(() => [
   { label: '今日搜索', value: stats.value.today?.searches || 0, desc: stats.value.today?.date || '' },
   { label: '今日推送', value: stats.value.today?.pushes || 0, desc: '推送成功数' },
@@ -200,6 +230,18 @@ async function checkHealth() {
   }
 }
 
+
+async function testSearchConnection() {
+  testingSearch.value = true
+  try {
+    const res = await api.get('/api/telegram-bot/search/test')
+    searchTestResult.value = res.data
+    message[res.data.ok ? 'success' : 'error'](res.data.ok ? '搜索 Bot 连接正常' : '搜索 Bot 连接异常，查看页面详情')
+    await loadLogs(true)
+  } finally {
+    testingSearch.value = false
+  }
+}
 async function loadAll() {
   loading.value = true
   try {
@@ -254,6 +296,23 @@ function logType(level: string) {
   return 'info'
 }
 
+
+function stepText(step: any) {
+  if (!step) return '-'
+  const status = step.ok ? '正常' : '异常'
+  const latency = step.latency_ms !== undefined ? `，${step.latency_ms} ms` : ''
+  const error = step.ok ? '' : `，${step.error_type || 'Error'}：${step.error || '-'}`
+  return `${status}${latency}${error}`
+}
+
+function formatJson(value: any) {
+  if (!value) return '-'
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
 onMounted(loadAll)
 </script>
 

@@ -4,9 +4,8 @@ from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.database import engine
-from app.models import Base
 from app.api.router import api_router
-from app.services.schema_service import ensure_runtime_database
+from app.services.schema_service import initialize_database
 from app.telegram_bot.runtime import start_configured_bots, stop_bots
 
 
@@ -16,8 +15,7 @@ async def lifespan(app: FastAPI):
     from app.database import async_session
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await ensure_runtime_database(conn)
+        await initialize_database(conn)
 
     async with async_session() as session:
         await ensure_admin_exists(session)

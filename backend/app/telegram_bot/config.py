@@ -96,7 +96,11 @@ class ConfigStore:
     def _defaults_from_env(self) -> RuntimeConfig:
         return RuntimeConfig(
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-            guangya_api_base=os.getenv("GUANGYA_API_BASE", ""),
+            guangya_api_base=(
+                os.getenv("TELEGRAM_SEARCH_API_BASE")
+                or os.getenv("PINDAO_API_BASE")
+                or "http://web:8000"
+            ),
             guangya_api_key=os.getenv("GUANGYA_API_KEY", ""),
             page_size=_int_env("PAGE_SIZE", 10),
             max_results=_int_env("MAX_RESULTS", 0),
@@ -111,7 +115,11 @@ class ConfigStore:
             push_bot_token=os.getenv("PUSH_BOT_TOKEN", ""),
             push_chat_id=os.getenv("PUSH_CHAT_ID", ""),
             push_enabled=_bool_env("PUSH_ENABLED", False),
-            push_api_base=os.getenv("PUSH_API_BASE", ""),
+            push_api_base=(
+                os.getenv("PUSH_API_BASE")
+                or os.getenv("PINDAO_API_BASE")
+                or "http://web:8000"
+            ),
             push_api_key=os.getenv("PUSH_API_KEY", ""),
             push_proxy_enabled=_bool_env("PUSH_PROXY_ENABLED", False),
             push_proxy_url=os.getenv("PUSH_PROXY_URL", ""),

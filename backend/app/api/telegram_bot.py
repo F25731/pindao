@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -42,6 +44,69 @@ class BotConfigPayload(BaseModel):
     def clean(self) -> dict[str, Any]:
         return {key: value for key, value in self.model_dump().items() if value is not None}
 
+
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def _error_payload(exc: Exception, started: float) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": False,
+        "latency_ms": _elapsed_ms(started),
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+    }
+    if isinstance(exc, httpx.HTTPStatusError):
+        payload["status_code"] = exc.response.status_code
+        payload["response_text"] = exc.response.text[:1000]
+    elif isinstance(exc, httpx.RequestError):
+        payload["request_url"] = str(exc.request.url) if exc.request else ""
+    return payload
+
+
+async def _test_telegram_get_me(config) -> dict[str, Any]:
+    started = time.monotonic()
+    if not config.telegram_bot_token:
+        return {
+            "ok": False,
+            "latency_ms": 0,
+            "error": "未配置 Telegram Bot Token",
+            "error_type": "ConfigError",
+        }
+
+    kwargs: dict[str, Any] = {"timeout": config.request_timeout_seconds}
+    if config.proxy_enabled and config.proxy_url:
+        kwargs["proxy"] = config.proxy_url
+
+    try:
+        async with httpx.AsyncClient(**kwargs) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{config.telegram_bot_token}/getMe")
+            resp.raise_for_status()
+            data = resp.json()
+        result = data.get("result") if isinstance(data, dict) else {}
+        return {
+            "ok": bool(data.get("ok")) if isinstance(data, dict) else False,
+            "latency_ms": _elapsed_ms(started),
+            "bot": {
+                "id": result.get("id") if isinstance(result, dict) else None,
+                "username": result.get("username") if isinstance(result, dict) else None,
+                "first_name": result.get("first_name") if isinstance(result, dict) else None,
+            },
+            "raw_ok": data.get("ok") if isinstance(data, dict) else None,
+        }
+    except Exception as exc:
+        return _error_payload(exc, started)
+
+
+async def _test_search_api(config) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        data = await GuangyaApiClient(config).health()
+        return {"ok": True, "latency_ms": _elapsed_ms(started), "response": data}
+    except Exception as exc:
+        return _error_payload(exc, started)
 
 def _config_response() -> dict[str, Any]:
     data = store.get().public_dict()
@@ -99,6 +164,36 @@ async def restart_search_bot(user: AdminUser = Depends(get_current_user)):
     message = await search_bot.restart()
     return {"message": message, "bot_running": search_bot.running()}
 
+
+@router.get("/search/test")
+async def test_search_bot_connection(user: AdminUser = Depends(get_current_user)):
+    config = store.get()
+    telegram = await _test_telegram_get_me(config)
+    search_api = await _test_search_api(config)
+    ok = bool(telegram.get("ok") and search_api.get("ok"))
+    metrics.add_event(
+        "success" if ok else "error",
+        "搜索测试",
+        "搜索 Bot 连接测试通过" if ok else "搜索 Bot 连接测试失败",
+    )
+    return {
+        "ok": ok,
+        "bot_running": search_bot.running(),
+        "config": {
+            "bot_enabled": config.bot_enabled,
+            "telegram_bot_token_set": bool(config.telegram_bot_token),
+            "guangya_api_base": config.guangya_api_base,
+            "guangya_api_key_set": bool(config.guangya_api_key),
+            "proxy_enabled": config.proxy_enabled,
+            "proxy_url_set": bool(config.proxy_url),
+            "request_timeout_seconds": config.request_timeout_seconds,
+            "status": config.status,
+            "page_size": config.page_size,
+            "max_results": config.max_results,
+        },
+        "telegram": telegram,
+        "search_api": search_api,
+    }
 
 @router.post("/push/start")
 async def start_push_bot(user: AdminUser = Depends(get_current_user)):

@@ -6,14 +6,14 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, engine
 from app.config import settings
-from app.models import Base, Task, Resource, GuangyaAccount
+from app.models import Task, Resource, GuangyaAccount
 from app.services.import_service import process_next_import_batch
-from app.services.schema_service import ensure_runtime_database
+from app.services.schema_service import initialize_database
 from app.services.system_control import get_worker_concurrency, is_worker_paused
 from app.services.system_log import append_system_log
 from app.worker.transfer_handler import execute_transfer
@@ -23,6 +23,11 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("worker")
+
+
+def is_deadlock_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "deadlock detected" in text or "deadlockdetectederror" in text
 
 
 async def recover_interrupted_tasks():
@@ -195,6 +200,10 @@ async def worker_loop():
             await asyncio.sleep(2)
 
         except Exception as e:
+            if is_deadlock_error(e):
+                logger.warning("Worker 遇到数据库死锁，已回滚并稍后重试: %s", e)
+                await asyncio.sleep(3)
+                continue
             logger.error(f"Worker 循环异常: {e}")
             try:
                 async with async_session() as log_db:
@@ -208,8 +217,7 @@ async def worker_loop():
 async def main():
     logger.info("光鸭资源转存 Worker 启动中...")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await ensure_runtime_database(conn)
+        await initialize_database(conn)
     async with async_session() as db:
         await append_system_log(db, "info", "worker", "光鸭资源转存 Worker 启动")
         await db.commit()

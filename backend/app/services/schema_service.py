@@ -1,5 +1,14 @@
 from sqlalchemy import text
 
+from app.models import Base
+
+
+
+async def initialize_database(conn):
+    await conn.execute(text("SELECT pg_advisory_xact_lock(2026060201)"))
+    await conn.run_sync(Base.metadata.create_all)
+    await ensure_runtime_schema(conn)
+    await ensure_runtime_indexes(conn)
 
 async def ensure_runtime_database(conn):
     await conn.execute(text("SELECT pg_advisory_xact_lock(2026060201)"))
